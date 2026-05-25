@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+*.egg
+
+# Colcon build artifacts
+build/
+install/
+log/
+
+# IDE
+.vscode/
+.idea/
+
+# Data files (large binaries — managed separately)
+data/*.pth
+data/*.MP4
+data/*.mp4
+data/depth_anything_v2/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive
+*.token
+*.key
+.env
+
+# Scratch / large binary docs
+/新建 文本文档.txt
+/*.pdf
+/*.PDF

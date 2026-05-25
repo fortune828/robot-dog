@@ -1,0 +1,12 @@
+# PlanPath.srv — 离线路由规划服务
+# 输入: 起点和终点 (局部 ENU 坐标, 米)
+# 输出: nav_msgs/Path + 成功标志 + 状态信息
+
+float64 start_x
+float64 start_y
+float64 goal_x
+float64 goal_y
+---
+nav_msgs/Path path
+bool success
+string message

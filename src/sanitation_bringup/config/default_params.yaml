@@ -1,0 +1,100 @@
+# ============================================================================
+#  四足环卫机器人 — 全局默认参数
+#  修改此文件即可切换 Mock/Real 模式、调整检测阈值等，无需改代码
+# ============================================================================
+
+# ---- 模拟摄像头 ----
+mock_camera_node:
+  ros__parameters:
+    video_path: ""                         # 空则自动查找 data/test_video.mp4
+    frame_width: 640
+    frame_height: 480
+    publish_rate: 15.0                     # Hz
+    topic: "/camera/image_raw"
+
+# ---- 目标检测 ----
+detection_node:
+  ros__parameters:
+    input_topic: "/camera/image_raw"
+    annotated_topic: "/detection/annotated_image"
+    results_topic: "/detection/results"
+    detection_prob: 0.4                    # 每帧产生检测的概率（Mock 模式）
+    max_detections: 3                      # 单帧最大检测数
+
+# ---- 模拟底盘 ----
+mock_chassis_node:
+  ros__parameters:
+    cmd_vel_topic: "/cmd_vel"
+    odom_topic: "/odom"
+    odom_frame: "odom"
+    base_frame: "base_link"
+    update_rate: 20.0                      # Hz
+    gps_origin_lat: 30.747903                # odom(0,0) 对应 GPS 纬度
+    gps_origin_lon: 103.925269               # odom(0,0) 对应 GPS 经度
+
+# ---- 模拟 RTK GPS ----
+mock_gps_node:
+  ros__parameters:
+    topic: "/fix"
+    publish_rate: 5.0
+    speed: 10.0
+    frame_id: "gps_link"
+    world_frame: "world"
+    plan_topic: "/global_plan"
+    origin_lat: 30.747903
+    origin_lon: 103.925269
+    noise_stddev: 0.000001                    # 静止时 GPS 噪声标准差 (°)
+
+# ---- OSM 地图引擎 ----
+osm_map_manager:
+  ros__parameters:
+    map_file: ""                                 # 空则自动查找 data/map.osm
+    origin_lat: 30.747903
+    origin_lon: 103.925269
+    world_frame: "world"
+    topology_marker_topic: "/osm_topology_markers"
+    plan_service_name: "/plan_osm_path"
+    goal_pose_topic: "/goal_pose"
+    global_plan_topic: "/global_plan"
+    gps_topic: "/fix"
+
+# ---- 全覆盖路径规划 (CPP) ----
+polygon_coverage_planner:
+  ros__parameters:
+    clicked_point_topic: "/clicked_point"
+    plan_topic: "/global_plan"
+    world_frame: "world"
+    sweep_spacing: 1.5                       # 扫掠线间距 (m)
+    closing_threshold: 10.0                  # 多边形闭合判定距离 (m)
+    gps_topic: "/fix"
+    mission_status_topic: "/mission_status"
+    osm_plan_service: "/plan_osm_path"
+    goal_pose_topic: "/goal_pose"
+
+# ---- 地面过滤 ----
+ground_filter_node:
+  ros__parameters:
+    input_topic: "/camera/depth_points"
+    output_topic: "/depth_anything/points_filtered"
+    min_z: 0.15                               # Z < min_z → 地面 (剔除)
+    max_z: 0.80                               # Z > max_z → 天空/树枝 (剔除)
+    output_frame: "camera_link"
+    log_interval: 30                          # 每 N 帧输出一次统计日志
+    camera_x: 0.15                            # 相机在 base_link 前方偏移 (m)
+    camera_y: 0.0
+    camera_z: 0.0                             # 两帧原点均在地面，无需 Z 偏移
+    camera_roll: 0.0
+    camera_pitch: 0.0
+    camera_yaw: 0.0
+
+# ---- 路点巡检 ----
+waypoint_patrol_node:
+  ros__parameters:
+    cmd_vel_topic: "/cmd_vel"
+    odom_topic: "/odom"
+    control_rate: 10.0                     # Hz
+    arrival_radius: 0.15                   # 路点到达判定半径 (m)
+    lookahead: 0.5                         # 纯追踪前视距离 (m)
+    max_linear: 0.4                        # 最大线速度 (m/s)
+    max_angular: 0.8                       # 最大角速度 (rad/s)
+    waypoints: [1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0]

@@ -1,0 +1,14 @@
+# Force LF for code files that run on Linux/WSL
+*.py text eol=lf
+*.launch.py text eol=lf
+*.yaml text eol=lf
+*.cfg text eol=lf
+*.xml text eol=lf
+*.msg text eol=lf
+*.srv text eol=lf
+*.md text eol=lf
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf
+*.osm text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf

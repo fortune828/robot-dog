@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir *)",
+      "Bash(conda *)",
+      "Read(//c/opt/**)",
+      "Read(//c/dev/**)",
+      "Read(//e/opt/**)",
+      "Bash(where.exe ros2 *)",
+      "Bash(wsl *)",
+      "Bash(cmd.exe *)"
+    ]
+  }
+}

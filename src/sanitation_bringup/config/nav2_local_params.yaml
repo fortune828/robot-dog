@@ -1,0 +1,206 @@
+# ============================================================================
+#  Nav2 局部避障参数 — 纯虚空模式 (无全局地图、无 static_layer)
+#
+#  TF 树: world → odom → base_link → camera_link
+#  感知链: MP4 → DepthAnythingV2 → /camera/depth_points
+#          → ground_filter_node → /depth_anything/points_filtered
+#          → voxel_layer → inflation_layer → local_costmap
+#
+#  用法:
+#    ros2 launch nav2_bringup navigation_launch.py \
+#      params_file:=src/sanitation_bringup/config/nav2_local_params.yaml \
+#      use_sim_time:=false
+# ============================================================================
+
+# ============================================================================
+#  全局代价地图 — 彻底禁用 (无全局规划、无 static map)
+# ============================================================================
+global_costmap:
+  global_costmap:                       # 双层嵌套 — Nav2 costmap 节点名必须匹配
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: odom
+      robot_base_frame: base_link
+      robot_radius: 0.30
+      rolling_window: true
+      width: 15
+      height: 15
+      resolution: 0.05
+      plugins: ["inflation_layer"]
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        enabled: true
+        inflation_radius: 0.01
+        cost_scaling_factor: 1.0
+        inflate_unknown: false
+        inflate_around_unknown: false
+
+      always_send_full_costmap: true
+
+# ============================================================================
+#  局部代价地图 — 唯一活跃层 (点云障碍物 → 膨胀区)
+# ============================================================================
+local_costmap:
+  local_costmap:                        # 双层嵌套 — Nav2 costmap 节点名必须匹配
+    ros__parameters:
+      update_frequency: 10.0
+      publish_frequency: 10.0
+      global_frame: odom
+      robot_base_frame: base_link
+      robot_radius: 0.30
+      rolling_window: true
+      width: 15
+      height: 15
+      resolution: 0.05
+      always_send_full_costmap: true
+      plugins: ["voxel_layer", "inflation_layer"]
+
+      # -------- Voxel Layer: 3D 点云 → 2D 障碍物标记 --------
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: true
+        observation_sources: "depth_cloud"
+        combination_method: 1
+
+        depth_cloud:
+          topic: "/depth_anything/points_filtered"
+          sensor_frame: "camera_link"
+          data_type: "PointCloud2"
+          expected_update_rate: 0.0
+
+          min_obstacle_height: 0.15
+          max_obstacle_height: 0.80
+
+          obstacle_range: 3.0
+          raytrace_range: 4.0
+          obstacle_min_range: 0.5
+          raytrace_min_range: 0.5
+
+          clearing: true
+          marking: true
+          max_z: 0.80
+          min_z: 0.15
+          voxel_size: 0.05
+
+      # -------- Inflation Layer: 障碍物膨胀 --------
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        enabled: true
+        inflation_radius: 0.40
+        cost_scaling_factor: 5.0
+        inflate_unknown: false
+        inflate_around_unknown: false
+
+# ============================================================================
+#  控制器 — Regulated Pure Pursuit + 碰撞检测
+# ============================================================================
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+
+    controller_plugins: ["FollowPath"]
+
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      desired_linear_vel: 0.3
+      max_linear_vel: 0.5
+      min_linear_vel: 0.0
+      lookahead_dist: 0.6
+      min_lookahead_dist: 0.4
+      max_lookahead_dist: 0.9
+      transform_tolerance: 0.3
+      use_velocity_scaled_lookahead_dist: true
+      use_collision_detection: true
+      max_allowed_time_to_collision: 1.5
+      use_cost_regulated_linear_velocity_scaling: true
+
+# ============================================================================
+#  全局规划器 — 最小占位 (Nav2 生命周期要求存在，但实际不用)
+# ============================================================================
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+# ============================================================================
+#  行为服务器 — 最小占位
+# ============================================================================
+behavior_server:
+  ros__parameters:
+    local_costmap_topic: "/local_costmap/costmap"
+    global_costmap_topic: "/global_costmap/costmap"
+    local_footprint_topic: "/local_costmap/published_footprint"
+    global_footprint_topic: "/global_costmap/published_footprint"
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+
+# ============================================================================
+#  BT Navigator 最小占位
+# ============================================================================
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_tolerance: 0.3
+    #default_nav_to_pose_bt_xml: ""
+    #default_nav_through_poses_bt_xml: ""
+    plugin_lib_names:
+      # -- 核心动作节点 (Humble) --
+      - "nav2_compute_path_to_pose_action_bt_node"
+      - "nav2_compute_path_through_poses_action_bt_node"
+      - "nav2_smooth_path_action_bt_node"
+      - "nav2_follow_path_action_bt_node"
+      # -- 恢复动作 (Humble) --
+      - "nav2_spin_action_bt_node"
+      - "nav2_wait_action_bt_node"
+      - "nav2_back_up_action_bt_node"
+      - "nav2_drive_on_heading_bt_node"
+      # -- 工具动作 (Humble) --
+      - "nav2_clear_costmap_service_bt_node"
+      - "nav2_truncate_path_action_bt_node"
+      # -- 条件节点 (Humble) --
+      - "nav2_is_stuck_condition_bt_node"
+      - "nav2_goal_reached_condition_bt_node"
+      - "nav2_initial_pose_received_condition_bt_node"
+      - "nav2_goal_updated_condition_bt_node"
+      - "nav2_globally_updated_goal_condition_bt_node"
+      - "nav2_is_path_valid_condition_bt_node"
+      - "nav2_transform_available_condition_bt_node"
+      # -- 控制流 / 装饰器 / 辅助 (Humble) --
+      - "nav2_recovery_node_bt_node"
+      - "nav2_pipeline_sequence_bt_node"
+      - "nav2_round_robin_node_bt_node"
+      - "nav2_rate_controller_bt_node"
+      - "nav2_goal_updater_node_bt_node"
+      - "nav2_remove_passed_goals_action_bt_node"
+      
+lifecycle_manager_navigation:
+  ros__parameters:
+    use_sim_time: false
+    autostart: true
+    node_names: ['controller_server', 'smoother_server', 'planner_server', 'behavior_server', 'bt_navigator', 'waypoint_follower', 'velocity_smoother']
+    bond_timeout: 4.0
+    attempt_respawn_reconnection: true
+    # 核心修改：给它 60 秒的超长耐心去等待节点启动回应
+    bond_respawn_max_duration: 60.0
+    transition_timeout: 60.0    # 让状态切换超时时间变长
