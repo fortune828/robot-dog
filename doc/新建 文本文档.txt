@@ -1,0 +1,15 @@
+# 如果你修改了 Python 代码或 launch 文件，先跑下面这句编译：
+colcon build --packages-select sanitation_perception sanitation_bringup
+
+# 启动基座
+source install/setup.bash
+ros2 launch sanitation_bringup local_avoidance.launch.py
+
+source install/setup.bash
+ros2 launch nav2_bringup navigation_launch.py \
+    params_file:=$(pwd)/src/sanitation_bringup/config/nav2_local_params.yaml \
+    use_sim_time:=false
+
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+rviz2
