@@ -71,6 +71,8 @@ class DepthToCloudNode(Node):
         self.declare_parameter("camera_height", 0.5)
         self.declare_parameter("target_width", 640)
         self.declare_parameter("target_height", 480)
+        self.declare_parameter("depth_scale", 1.0)       # 深度缩放因子 (校准用, 默认 1.0)
+        self.declare_parameter("depth_inverse", False)   # True=逆深度(视差), False=正深度
 
         video_path = (
             self.get_parameter("video_path").get_parameter_value().string_value
@@ -110,6 +112,12 @@ class DepthToCloudNode(Node):
         )
         self._target_h = (
             self.get_parameter("target_height").get_parameter_value().integer_value
+        )
+        self._depth_scale = (
+            self.get_parameter("depth_scale").get_parameter_value().double_value
+        )
+        self._depth_inverse = (
+            self.get_parameter("depth_inverse").get_parameter_value().bool_value
         )
 
         data_dir = _find_data_dir(__file__)
@@ -227,15 +235,29 @@ class DepthToCloudNode(Node):
 
     # ------------------------------------------------------------------
     #  Inference → metric depth [min_depth, max_depth]
+    #
+    #  使用 P5-P95 百分位归一化（替代每帧 min-max）：
+    #    - 避免单帧场景缩放导致的距离尺度漂移
+    #    - 稳定的场景深度 → 真实物理尺度的映射
+    #    - depth_scale 参数可用于校准（默认 1.0）
     # ------------------------------------------------------------------
 
     def _infer(self, rgb: np.ndarray) -> np.ndarray:
         depth = self._model.infer_image(rgb)  # (H, W) float32, relative
 
-        d_min, d_max = depth.min(), depth.max()
-        if d_max - d_min > 1e-6:
-            depth = (depth - d_min) / (d_max - d_min)
-            depth = depth * (self._max_depth - self._min_depth) + self._min_depth
+        # 如果模型输出的是视差（inverse depth），取反
+        if self._depth_inverse:
+            depth = -depth
+
+        # 百分位归一化：截断首尾 5% 的异常值
+        d_flat = depth.ravel()
+        p5 = np.percentile(d_flat, 5)
+        p95 = np.percentile(d_flat, 95)
+
+        if p95 - p5 > 1e-6:
+            depth = (depth - p5) / (p95 - p5)                     # [0, 1]
+            depth = np.clip(depth, 0.0, 1.0)
+            depth = depth * (self._max_depth - self._min_depth) * self._depth_scale + self._min_depth
 
         return depth.astype(np.float32)
 

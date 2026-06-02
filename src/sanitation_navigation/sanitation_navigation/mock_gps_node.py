@@ -122,14 +122,10 @@ class MockGpsNode(Node):
         # ---- 任务状态发布 ----
         self._mission_status_pub = self.create_publisher(String, "/mission_status", 10)
 
-        # ---- 定时器 ----
+        # ---- 定时器（唯一 Timer：控制 + GPS + TF 三合一） ----
         self._timer = self.create_timer(1.0 / rate, self._tick)
 
-        self.get_logger().info(
-            f"GPS 模拟已启动 | 原点=({self._origin_lat:.6f},{self._origin_lon:.6f}) | "
-            f"等待 /global_plan ... | 空闲噪声 σ={self._noise_stddev:.1e}°"
-        )
-
+        self._log_counter = 0  # 限频日志计数器
     # ------------------------------------------------------------------
     #  订阅回调
     # ------------------------------------------------------------------

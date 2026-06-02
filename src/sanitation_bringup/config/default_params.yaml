@@ -76,13 +76,19 @@ ground_filter_node:
   ros__parameters:
     input_topic: "/camera/depth_points"
     output_topic: "/depth_anything/points_filtered"
-    min_z: 0.15                               # Z < min_z → 地面 (剔除)
-    max_z: 0.80                               # Z > max_z → 天空/树枝 (剔除)
+    filter_mode: "bev_adaptive"               # "pass_through" (简单Z轴) 或 "bev_adaptive" (BEV自适应)
+    min_z: 0.05                               # pass_through模式: 障碍物最低高度 (m)
+    max_z: 0.80                               # pass_through模式: 障碍物最高高度 (m)
+    bev_resolution: 0.1                       # BEV网格分辨率 (m)
+    bev_height_diff: 0.08                     # BEV高度差阈值: 高出地面此值 → 障碍物
     output_frame: "camera_link"
-    log_interval: 30                          # 每 N 帧输出一次统计日志
-    camera_x: 0.15                            # 相机在 base_link 前方偏移 (m)
+    blind_spot: 0.5                           # 前方盲区距离 (m)
+    camera_height: 0.0                        # 不再叠加！depth_to_cloud 已补偿相机高度
+    camera_pitch_deg: 5.0                     # 相机俯仰角 (度)
+    log_interval: 30
+    camera_x: 0.15
     camera_y: 0.0
-    camera_z: 0.0                             # 两帧原点均在地面，无需 Z 偏移
+    camera_z: 0.0
     camera_roll: 0.0
     camera_pitch: 0.0
     camera_yaw: 0.0
@@ -98,3 +104,22 @@ waypoint_patrol_node:
     max_linear: 0.4                        # 最大线速度 (m/s)
     max_angular: 0.8                       # 最大角速度 (rad/s)
     waypoints: [1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0]
+
+# ---- 深度估计 → 点云 (Phase 1) ----
+depth_to_cloud_node:
+  ros__parameters:
+    video_path: ""                       # 空则自动查找 data/test_video.mp4
+    encoder: "vits"
+    weights_path: ""                      # 空则自动查找 data/depth_anything_v2_vits.pth
+    depth_anything_home: ""               # Depth-Anything-V2 根目录
+    device: "auto"                         # "cuda", "cpu", or "auto"
+    inference_rate: 10.0                   # Hz
+    pointcloud_topic: "/camera/depth_points"
+    stride: 4                              # 下采样步长 (4 ≈ 19k pts)
+    min_depth: 0.1                         # 最小深度 (m)
+    max_depth: 10.0                        # 最大深度 (m)
+    camera_height: 0.5                     # 相机离地高度 (m)
+    target_width: 640
+    target_height: 480
+    depth_scale: 2.0                       # ← 深度缩放校准: 设 2.0 让距离放大一倍
+    depth_inverse: false                   # true=逆深度/视差模式

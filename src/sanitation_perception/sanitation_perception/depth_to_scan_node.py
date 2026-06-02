@@ -240,21 +240,22 @@ class DepthToScanNode(Node):
         )
 
     # ------------------------------------------------------------------
-    #  Inference — Iron Law 3: metric depth [0.5, 10.0] m
+    #  Inference — 百分位归一化（稳定尺度，避免每帧漂移）
     # ------------------------------------------------------------------
 
     def _infer(self, frame: np.ndarray) -> np.ndarray:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         depth = self._model.infer_image(rgb)  # (H, W) float32, relative
 
-        # Remap relative depth → metric [0.5, 10.0] metres.
-        # DA2 outputs depth (higher = farther); if your model outputs
-        # inverse depth (disparity, higher = closer), swap the comment below.
-        d_min, d_max = depth.min(), depth.max()
-        if d_max - d_min > 1e-6:
-            depth = (depth - d_min) / (d_max - d_min)       # [0, 1]
-            # depth = 1.0 - depth                           # uncomment if disparity
-            depth = depth * 9.5 + 0.5                       # [0.5, 10.0]
+        # 百分位归一化：截断首尾 5% 的异常值
+        d_flat = depth.ravel()
+        p5 = np.percentile(d_flat, 5)
+        p95 = np.percentile(d_flat, 95)
+
+        if p95 - p5 > 1e-6:
+            depth = (depth - p5) / (p95 - p5)       # [0, 1]
+            depth = np.clip(depth, 0.0, 1.0)
+            depth = depth * 9.5 + 0.5                # [0.5, 10.0]
 
         return depth.astype(np.float32)
 
