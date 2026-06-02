@@ -62,7 +62,7 @@ local_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
         observation_sources: "depth_cloud"
-        combination_method: 1
+        combination_method: 0              # ← 覆盖模式：每帧新点云完全替换旧数据（仿真必需！）
 
         depth_cloud:
           topic: "/depth_anything/points_filtered"
@@ -70,18 +70,18 @@ local_costmap:
           data_type: "PointCloud2"
           expected_update_rate: 0.0
 
-          min_obstacle_height: 0.05
-          max_obstacle_height: 0.80
+          min_obstacle_height: 0.03
+          max_obstacle_height: 2.00
 
-          obstacle_range: 2.5
-          raytrace_range: 3.0
+          obstacle_range: 3.5
+          raytrace_range: 4.0
           obstacle_min_range: 0.3
           raytrace_min_range: 0.3
 
           clearing: true
           marking: true
-          max_z: 0.80
-          min_z: 0.05
+          max_z: 1.50
+          min_z: -1.50
           voxel_size: 0.05
           observation_persistence: 0.3
 
@@ -89,8 +89,8 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
-        inflation_radius: 0.30
-        cost_scaling_factor: 3.0
+        inflation_radius: 0.15
+        cost_scaling_factor: 2.0
         inflate_unknown: false
         inflate_around_unknown: false
 
@@ -117,9 +117,9 @@ controller_server:
       max_lookahead_dist: 0.9
       transform_tolerance: 0.3
       use_velocity_scaled_lookahead_dist: true
-      use_collision_detection: true
+      use_collision_detection: false          # 仿真模式关闭碰撞检测，避免假阳性误杀
       max_allowed_time_to_collision: 1.5
-      use_cost_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: false
 
 # ============================================================================
 #  全局规划器 — 最小占位 (Nav2 生命周期要求存在，但实际不用)
@@ -163,7 +163,7 @@ bt_navigator:
     global_frame: odom
     robot_base_frame: base_link
     transform_tolerance: 0.3
-    bt_loop_duration: 50                    # 降至 20Hz (50ms loop)
+    bt_loop_duration: 100                   # 降至 10Hz (100ms loop)，仿真环境够用
     default_server_timeout: 20
     #default_nav_to_pose_bt_xml: ""
     #default_nav_through_poses_bt_xml: ""

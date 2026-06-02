@@ -4,19 +4,15 @@ Launches:
   1. mock_gps_node           — world → odom TF (identity, idle)
   2. mock_chassis_node       — odom → base_link TF (+ /odom)
   3. depth_to_cloud_node     — Depth Anything V2 → /camera/depth_points
-  4. ground_filter_node      — Z 轴过滤 → /depth_anything/points_filtered
+  4. ground_filter_node      — BEV/pass_through → /depth_anything/points_filtered
                               + static TF base_link → camera_link
 
-然后手动启动 Nav2 (见下方注释) 或使用 nav2_bringup:
+所有参数集中在 default_params.yaml。仅 video_path/stride/device 支持命令行覆盖。
+
+然后手动启动 Nav2:
   ros2 launch nav2_bringup bringup_launch.py \
     params_file:=src/sanitation_bringup/config/nav2_local_params.yaml \
     use_sim_time:=false
-
-RViz2 中关键观察项:
-  - /local_costmap/costmap       — 障碍物红/青色膨胀区
-  - /depth_anything/points_filtered — 悬空障碍物点云 (Z 0.15~0.80m)
-  - /local_plan                   — 局部绕障路径
-  - TF 树: world → odom → base_link → camera_link 完整无断链
 """
 
 import os
@@ -37,14 +33,6 @@ def generate_launch_description():
         "stride", default_value="4",
         description="Point cloud downsampling",
     )
-    min_z_arg = DeclareLaunchArgument(
-        "min_z", default_value="0.15",
-        description="Z floor threshold (m)",
-    )
-    max_z_arg = DeclareLaunchArgument(
-        "max_z", default_value="0.80",
-        description="Z ceiling threshold (m)",
-    )
     device_arg = DeclareLaunchArgument(
         "device", default_value="auto",
         description="'cuda', 'cpu', or 'auto'",
@@ -52,8 +40,6 @@ def generate_launch_description():
 
     video_path = LaunchConfiguration("video_path")
     stride = LaunchConfiguration("stride")
-    min_z = LaunchConfiguration("min_z")
-    max_z = LaunchConfiguration("max_z")
     device = LaunchConfiguration("device")
 
     config_dir = os.path.join(
@@ -99,27 +85,23 @@ def generate_launch_description():
         executable="ground_filter_node",
         name="ground_filter_node",
         output="screen",
-        parameters=[default_config, {
-            "min_z": min_z,
-            "max_z": max_z,
-        }],
+        parameters=[default_config],
         arguments=["--ros-args", "--log-level", "info"],
     )
 
     return LaunchDescription([
-        video_path_arg, stride_arg, min_z_arg, max_z_arg, device_arg,
+        video_path_arg, stride_arg, device_arg,
         LogInfo(msg="=== 局部避障验证：TF 基础设施 ==="),
         LogInfo(msg="mock_gps_node     → world → odom TF (idle)"),
         LogInfo(msg="mock_chassis_node → odom → base_link TF"),
         LogInfo(msg=""),
         LogInfo(msg="=== 局部避障验证：感知管线 ==="),
         LogInfo(msg="depth_to_cloud  → /camera/depth_points (raw)"),
-        LogInfo(msg="ground_filter   → /depth_anything/points_filtered (Z %.2f~%.2f)" % (0.15, 0.80)),
+        LogInfo(msg="ground_filter   → /depth_anything/points_filtered"),
         LogInfo(msg=""),
-        LogInfo(msg="=== 手动启动 Nav2 (新终端): ==="),
+        LogInfo(msg="=== 手动启动 Nav2: ==="),
         LogInfo(msg="ros2 launch nav2_bringup bringup_launch.py "
-                "params_file:=src/sanitation_bringup/config/nav2_local_params.yaml "
-                "use_sim_time:=false"),
+                "params_file:=src/sanitation_bringup/config/nav2_local_params.yaml"),
         mock_gps_node,
         mock_chassis_node,
         depth_to_cloud_node,

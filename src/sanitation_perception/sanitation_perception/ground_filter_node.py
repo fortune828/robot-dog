@@ -42,17 +42,16 @@ class GroundFilterNode(Node):
         # ---- parameters ----
         self.declare_parameter("input_topic", "/camera/depth_points")
         self.declare_parameter("output_topic", "/depth_anything/points_filtered")
-        self.declare_parameter("filter_mode", "bev_adaptive")  # "pass_through" or "bev_adaptive"
-        self.declare_parameter("min_z", 0.05)     # min obstacle height above ground (m)
-        self.declare_parameter("max_z", 0.80)     # max obstacle height (m)
+        self.declare_parameter("filter_mode", "bev_adaptive")
+        self.declare_parameter("min_z", 0.08)     # 与 YAML 一致
+        self.declare_parameter("max_z", 1.50)     # 与 YAML 一致
         self.declare_parameter("output_frame", "camera_link")
-        self.declare_parameter("blind_spot", 0.5)
-        self.declare_parameter("camera_height", 0.0)  # ← 不再叠加! depth_to_cloud 已补偿
-        self.declare_parameter("camera_pitch_deg", 5.0)
+        self.declare_parameter("blind_spot", 2.0) # 与 YAML 一致
+        self.declare_parameter("camera_height", 1.0) # 与 YAML 一致: 相机物理安装高度
+        self.declare_parameter("camera_pitch_deg", 0.0) # 与 YAML 一致
         self.declare_parameter("log_interval", 30)
-        # BEV 专用参数
-        self.declare_parameter("bev_resolution", 0.1)   # BEV 网格分辨率 (m)
-        self.declare_parameter("bev_height_diff", 0.08) # 高度差阈值: 超过此值视为障碍物
+        self.declare_parameter("bev_resolution", 0.15)   # 与 YAML 一致
+        self.declare_parameter("bev_height_diff", 0.12) # 与 YAML 一致
 
         input_topic = self.get_parameter("input_topic").get_parameter_value().string_value
         output_topic = self.get_parameter("output_topic").get_parameter_value().string_value
@@ -98,12 +97,11 @@ class GroundFilterNode(Node):
     # ------------------------------------------------------------------
 
     def _publish_static_tf(self):
-        """Publish the missing base_link → camera_link static transform.
+        """Publish base_link → camera_link static transform.
 
-        Default: camera mounted ~15 cm forward of base_link origin, at same
-        ground-referenced height.  Both origins sit on the ground plane; the
-        camera itself is at Z=0.5 m inside the camera_link frame (handled by
-        depth_to_cloud_node back-projection).
+        Camera mounted 1.0m above ground, 15cm forward of base_link.
+        This TF is what Nav2 uses to transform point cloud Z-coordinates
+        from camera frame (origin at lens) to base_link frame (origin on ground).
         """
         if not HAS_TF:
             self.get_logger().warn("tf2_ros unavailable, skipping static TF")
@@ -111,7 +109,7 @@ class GroundFilterNode(Node):
 
         self.declare_parameter("camera_x", 0.15)
         self.declare_parameter("camera_y", 0.0)
-        self.declare_parameter("camera_z", 0.0)
+        self.declare_parameter("camera_z", 1.0)
         self.declare_parameter("camera_roll", 0.0)
         self.declare_parameter("camera_pitch", 0.0)
         self.declare_parameter("camera_yaw", 0.0)
@@ -152,7 +150,7 @@ class GroundFilterNode(Node):
         )
 
     # ------------------------------------------------------------------
-    #  PointCloud callback — 3D transform + spatial filter
+    #  PointCloud callback — spatial filter only, TF handles transforms
     # ------------------------------------------------------------------
 
     def _cloud_callback(self, msg: PointCloud2):
@@ -160,46 +158,45 @@ class GroundFilterNode(Node):
         if n_points == 0:
             return
 
-        # ---- parse raw buffer → (N, 4) float32 ----
-        # depth_to_cloud_node already outputs in ROS camera standard frame:
-        #   X = forward, Y = left(+), Z = up(+), frame_id = "camera_link"
-        # NO optical→camera conversion needed!
+        # depth_to_cloud_node 输出纯相机帧 (X=forward, Y=left, Z=up, origin at camera)
+        # TF base_link→camera_link 负责所有坐标变换，此处只做空间过滤
         data = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
         X_cam = data[:, 0]   # forward
-        Y_cam = data[:, 1]   # left(+)
-        Z_cam = data[:, 2]   # up(+)
+        Y_cam = data[:, 1]   # left
+        Z_cam = data[:, 2]   # up (relative to camera center)
         intensity = data[:, 3]
 
-        # ---- camera → base_link (pitch rotation around Y only) ----
-        # NO height offset: depth_to_cloud already compensates camera_height
-        cp = self._cos_pitch
-        sp = self._sin_pitch
-        X_base = X_cam * cp + Z_cam * sp
-        Y_base = Y_cam
-        Z_base = -X_cam * sp + Z_cam * cp
+        # ---- blind spot filter ----
+        fwd_mask = X_cam > self._blind_spot
 
-        # ---- filter by forward clearance ----
-        fwd_mask = X_base > self._blind_spot
-
-        # ---- height filter (mode-dependent) ----
+        # ---- ground filter (mode-dependent) ----
         if self._filter_mode == "bev_adaptive":
-            height_mask = self._bev_height_filter(X_base, Y_base, Z_base, fwd_mask)
+            height_mask = self._bev_height_filter(X_cam, Y_cam, Z_cam, fwd_mask)
         else:
-            # pass_through: simple Z-band crop
-            height_mask = (Z_base >= self._min_z) & (Z_base <= self._max_z)
+            # pass_through: 障碍物比地面高 min_z, 绝对高度不超过 max_z
+            ground_z = -self._camera_height
+            height_mask = (Z_cam >= ground_z + self._min_z) & (Z_cam <= self._max_z)
 
         mask = fwd_mask & height_mask
 
-        # ---- repack surviving points ----
+        # ---- DIAG: 每10帧输出诊断 ----
+        self._frame_seq += 1
+        if self._frame_seq % 10 == 0:
+            self.get_logger().info(
+                f"DIAG frame#{self._frame_seq} | raw={n_points} "
+                f"blind={fwd_mask.sum()} filt={mask.sum()} "
+                f"Z_in=[{Z_cam.min():.2f},{Z_cam.max():.2f}] "
+                f"Z_out=[{Z_cam[mask].min():.3f},{Z_cam[mask].max():.3f}] "
+                f"mode={self._filter_mode}"
+            )
+
+        # ---- repack ----
         filtered = np.column_stack([
-            X_base[mask], Y_base[mask], Z_base[mask], intensity[mask]
+            X_cam[mask], Y_cam[mask], Z_cam[mask], intensity[mask]
         ]).astype(np.float32)
 
         out = PointCloud2()
-        out.header = Header(
-            stamp=msg.header.stamp,
-            frame_id=self._output_frame,
-        )
+        out.header = Header(stamp=msg.header.stamp, frame_id=self._output_frame)
         out.height = 1
         out.width = filtered.shape[0]
         out.fields = [
@@ -213,19 +210,16 @@ class GroundFilterNode(Node):
         out.is_bigendian = False
         out.is_dense = True
         out.data = filtered.tobytes()
-
         self._pub.publish(out)
 
-        # ---- periodic statistics ----
+        # ---- stats ----
         self._frame_seq += 1
         if self._log_interval > 0 and self._frame_seq % self._log_interval == 0:
             kept_pct = 100.0 * filtered.shape[0] / n_points if n_points else 0
             self.get_logger().info(
                 f"Frame #{self._frame_seq} | "
-                f"in={n_points} → out={filtered.shape[0]} "
-                f"({kept_pct:.1f}%) | "
-                f"X>{self._blind_spot:.2f}m "
-                f"Z∈[{self._min_z:.2f}, {self._max_z:.2f}]m"
+                f"in={n_points} → out={filtered.shape[0]} ({kept_pct:.1f}%) | "
+                f"X>{self._blind_spot:.2f}m"
             )
 
     # ------------------------------------------------------------------
@@ -233,62 +227,28 @@ class GroundFilterNode(Node):
     # ------------------------------------------------------------------
 
     def _bev_height_filter(self, X, Y, Z, valid_mask):
-        """BEV 自适应地面过滤（完全向量化，无 Python 循环）。
+        """简化的 BEV 自适应地面过滤。
 
-        原理:
-          1. XY 平面网格化, np.minimum.at 取每个 cell 的最小 Z = 局部地面
-          2. 每个点的 Z 减其 cell 的地面高度，差值 > threshold → 障碍物
-          3. 地面直线约束: 对地面 cell 做加权线性拟合，过滤不符合直线趋势的噪声地面点
-
-        复杂度: O(n)，适合 15K+ 点的实时处理
+        使用全局地面高度（Z 的 5 分位数）作为基准，而非 per-cell min-Z。
+        这避免了"cell 内只有障碍物、无地面参照"导致的漏检问题。
         """
         n_total = len(Z)
         if not np.any(valid_mask):
             return np.zeros(n_total, dtype=bool)
 
-        Xv, Yv, Zv = X[valid_mask], Y[valid_mask], Z[valid_mask]
+        Zv = Z[valid_mask]
 
-        # ---- Step 1: 网格化 ----
-        xi = np.floor(Xv / self._bev_res).astype(np.int32)
-        yi = np.floor(Yv / self._bev_res).astype(np.int32)
-        xi -= xi.min()
-        yi -= yi.min()
-        grid_w = int(xi.max()) + 1
-        grid_h = int(yi.max()) + 1
+        # 全局地面高度: 取 Z 最小的 5% 的中位数作为地面基准
+        n_valid = len(Zv)
+        k_ground = max(1, int(n_valid * 0.05))
+        ground_z = float(np.partition(Zv, k_ground)[k_ground])
 
-        # ---- Step 2: 向量化取每 cell 最小 Z（地面高度） ----
-        grid_z = np.full((grid_h, grid_w), np.inf, dtype=np.float32)
-        np.minimum.at(grid_z, (yi, xi), Zv)
+        # 高于地面 bev_height_diff 的为障碍物
+        is_obstacle = (Zv - ground_z) > self._bev_diff
 
-        # ---- Step 3: 每点高度减去其 cell 的地面高度 ----
-        cell_ground = grid_z[yi, xi]
-        height_above_ground = Zv - cell_ground
+        # 额外上限: 太高 (天空/树冠) 忽略
+        is_obstacle &= Zv < (ground_z + self._max_z)
 
-        # ---- Step 4: 障碍物判定（高于局部地面 → 障碍物） ----
-        is_obstacle = np.isfinite(cell_ground) & (height_above_ground > self._bev_diff)
-
-        # ---- Step 5: 地面直线约束（可选，过滤远处翘起的地面噪声） ----
-        # 分析地面 cell: 若某 cell 的地面高度与地面直线的偏差 > 阈值，视为噪声
-        ground_cells = np.isfinite(grid_z) & (grid_z < self._max_z)
-        if ground_cells.sum() > 20:
-            gy, gx = np.where(ground_cells)
-            gz = grid_z[gy, gx]
-            # 地面直线: Z = a*X + b (随距离线性变化)
-            # 加权最小二乘（近处权重更大）
-            rx = gx.astype(np.float32) * self._bev_res + xi.min() * self._bev_res
-            weights = 1.0 / (rx + 1.0)  # 近处权重大
-            A = np.column_stack([rx, np.ones_like(rx)])
-            W = np.diag(weights)
-            try:
-                coeffs = np.linalg.lstsq(A.T @ W @ A, A.T @ W @ gz, rcond=None)[0]
-                a, b = coeffs[0], coeffs[1]
-                # 对每个障碍物候选点,用地面直线验证
-                expected_ground = a * Xv + b
-                is_obstacle &= (Zv - expected_ground) > self._bev_diff
-            except np.linalg.LinAlgError:
-                pass  # 直线拟合失败，回退到纯 cell-min 判定
-
-        # ---- Step 6: 映射回全量 mask ----
         result = np.zeros(n_total, dtype=bool)
         result[np.where(valid_mask)[0]] = is_obstacle
         return result

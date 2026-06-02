@@ -76,19 +76,19 @@ ground_filter_node:
   ros__parameters:
     input_topic: "/camera/depth_points"
     output_topic: "/depth_anything/points_filtered"
-    filter_mode: "bev_adaptive"               # "pass_through" (简单Z轴) 或 "bev_adaptive" (BEV自适应)
-    min_z: 0.05                               # pass_through模式: 障碍物最低高度 (m)
-    max_z: 0.80                               # pass_through模式: 障碍物最高高度 (m)
-    bev_resolution: 0.1                       # BEV网格分辨率 (m)
-    bev_height_diff: 0.08                     # BEV高度差阈值: 高出地面此值 → 障碍物
+    filter_mode: "bev_adaptive"               # "pass_through" 或 "bev_adaptive"
+    min_z: 0.08                               # pass_through模式: 障碍物最低高度 (m)
+    max_z: 1.50                               # pass_through模式: 障碍物最高高度 (m)
+    bev_resolution: 0.15                      # BEV网格分辨率 (m), 增大减少噪声
+    bev_height_diff: 0.12                     # BEV高度差阈值: 高出地面此值 → 障碍物, 增大过滤地面噪点
     output_frame: "camera_link"
-    blind_spot: 0.5                           # 前方盲区距离 (m)
-    camera_height: 0.0                        # 不再叠加！depth_to_cloud 已补偿相机高度
-    camera_pitch_deg: 5.0                     # 相机俯仰角 (度)
+    blind_spot: 2.0                           # 前方盲区距离 (m), 消除近处地面噪声
+    camera_height: 1.0                        # 相机物理安装高度 (m)
+    camera_pitch_deg: 0.0                     # 相机俯仰角 (度)
     log_interval: 30
     camera_x: 0.15
     camera_y: 0.0
-    camera_z: 0.0
+    camera_z: 1.0                             # ← 相机离地1m
     camera_roll: 0.0
     camera_pitch: 0.0
     camera_yaw: 0.0
@@ -118,8 +118,8 @@ depth_to_cloud_node:
     stride: 4                              # 下采样步长 (4 ≈ 19k pts)
     min_depth: 0.1                         # 最小深度 (m)
     max_depth: 10.0                        # 最大深度 (m)
-    camera_height: 0.5                     # 相机离地高度 (m)
+    camera_height: 0.0                     # ← 纯相机帧！坐标系偏移由TF的camera_z负责
     target_width: 640
     target_height: 480
-    depth_scale: 2.0                       # ← 深度缩放校准: 设 2.0 让距离放大一倍
+    depth_scale: 1.5                       # ← 深度缩放校准
     depth_inverse: false                   # true=逆深度/视差模式

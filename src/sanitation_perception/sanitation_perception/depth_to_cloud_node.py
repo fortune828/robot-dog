@@ -68,10 +68,10 @@ class DepthToCloudNode(Node):
         self.declare_parameter("stride", 4)
         self.declare_parameter("min_depth", 0.1)
         self.declare_parameter("max_depth", 10.0)
-        self.declare_parameter("camera_height", 0.5)
+        self.declare_parameter("camera_height", 0.0)   # 与 YAML 一致: 纯相机帧
         self.declare_parameter("target_width", 640)
         self.declare_parameter("target_height", 480)
-        self.declare_parameter("depth_scale", 1.0)       # 深度缩放因子 (校准用, 默认 1.0)
+        self.declare_parameter("depth_scale", 1.5)       # 与 YAML 一致
         self.declare_parameter("depth_inverse", False)   # True=逆深度(视差), False=正深度
 
         video_path = (
@@ -266,11 +266,14 @@ class DepthToCloudNode(Node):
     # ------------------------------------------------------------------
 
     def _depth_to_cloud(self, depth: np.ndarray, stamp) -> PointCloud2:
-        """Pinhole back-projection → ROS standard frame (X-fwd, Y-left, Z-up).
+        """Pinhole back-projection → camera optical frame (pure, no height offset).
 
         point_x = depth                     forward distance
         point_y = -(u - cx) * depth / fx    left +  (horizontal)
-        point_z = -(v - cy) * depth / fy    up   +  (vertical) + camera_height
+        point_z = -(v - cy) * depth / fy    up   +  (vertical, pure camera origin)
+
+        NOTE: Z is relative to camera optical center. Camera height offset
+              is handled by the TF base_link→camera_link transform, NOT here.
 
         Fields: x, y, z, intensity (FLOAT32 × 4, point_step=16).
         """
@@ -278,7 +281,7 @@ class DepthToCloudNode(Node):
 
         Xf = Z                                                # forward
         Yf = self._py * Z                                    # left
-        Zf = self._pz * Z + self._camera_height              # up
+        Zf = self._pz * Z                                    # up (pure camera frame, no height offset)
 
         mask = (Z > self._min_depth) & (Z < self._max_depth)
 
