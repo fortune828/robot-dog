@@ -70,6 +70,12 @@ class TestPurePursuit:
         assert cmd.linear <= 0.3
         assert abs(cmd.angular) <= 0.5
 
+    def test_lookahead_changes_turn_rate(self):
+        pose = Pose2D(0, 0, 0)
+        tight = pure_pursuit(pose, (1, 1), lookahead=0.25, max_angular=10.0)
+        smooth = pure_pursuit(pose, (1, 1), lookahead=1.0, max_angular=10.0)
+        assert abs(tight.angular) > abs(smooth.angular)
+
     def test_large_angle_error_reduces_speed(self):
         """大角度偏差时应减速"""
         # 目标在背后

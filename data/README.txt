@@ -1,4 +1,4 @@
 此目录存放测试数据：
-- test_video.mp4  : 模拟摄像头测试视频（任意 .mp4 文件）
-- *.csv           : 路点坐标文件
-- *.pt / *.onnx   : YOLO 模型权重文件（生产环境）
+- videos/test_video.mp4：默认模拟摄像头视频
+- output/：实验生成结果，不提交到 Git
+- map.osm：离线 OSM 测试地图

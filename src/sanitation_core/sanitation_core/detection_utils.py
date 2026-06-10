@@ -32,6 +32,9 @@ def generate_mock_detections(
     """
     rng = rng or random.Random()
     h, w = frame_shape[0], frame_shape[1]
+    if h < 3 or w < 3 or max_detections <= 0 or detection_prob <= 0.0:
+        return []
+    detection_prob = min(1.0, detection_prob)
 
     if rng.random() > detection_prob:
         return []
@@ -41,8 +44,8 @@ def generate_mock_detections(
     for _ in range(num):
         cls = rng.choice(MOCK_CLASSES)
         conf = round(rng.uniform(0.45, 0.99), 2)
-        bw = rng.randint(20, w // 3)
-        bh = rng.randint(20, h // 3)
+        bw = rng.randint(1, max(1, w // 3))
+        bh = rng.randint(1, max(1, h // 3))
         bx = rng.randint(0, w - bw)
         by = rng.randint(0, h - bh)
         detections.append(

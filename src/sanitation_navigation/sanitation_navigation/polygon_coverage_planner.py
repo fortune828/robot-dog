@@ -18,6 +18,7 @@ Architecture:
 """
 
 import math
+import heapq
 
 import rclpy
 from rclpy.node import Node
@@ -42,6 +43,50 @@ except ImportError:
     HAS_PLANPATH_SRV = False
 
 
+def _safe_connector(poly, start, end):
+    """Return a shortest visible connector that remains inside the polygon."""
+    direct = LineString([start, end])
+    if poly.covers(direct):
+        return [start, end]
+
+    vertices = [start, end]
+    for ring in [poly.exterior, *poly.interiors]:
+        vertices.extend(list(ring.coords)[:-1])
+
+    graph = [[] for _ in vertices]
+    for i in range(len(vertices)):
+        for j in range(i + 1, len(vertices)):
+            segment = LineString([vertices[i], vertices[j]])
+            if poly.covers(segment):
+                distance = segment.length
+                graph[i].append((distance, j))
+                graph[j].append((distance, i))
+
+    queue = [(0.0, 0)]
+    distances = {0: 0.0}
+    previous = {}
+    while queue:
+        distance, node = heapq.heappop(queue)
+        if node == 1:
+            break
+        if distance != distances.get(node):
+            continue
+        for edge_length, neighbor in graph[node]:
+            candidate = distance + edge_length
+            if candidate < distances.get(neighbor, float("inf")):
+                distances[neighbor] = candidate
+                previous[neighbor] = node
+                heapq.heappush(queue, (candidate, neighbor))
+
+    if 1 not in distances:
+        return None
+    route = [1]
+    while route[-1] != 0:
+        route.append(previous[route[-1]])
+    route.reverse()
+    return [vertices[index] for index in route]
+
+
 class PolygonCoveragePlanner(Node):
     """全覆盖路径规划节点 — 事件驱动型，含 OSM 本地通勤与无限折返"""
 
@@ -62,7 +107,7 @@ class PolygonCoveragePlanner(Node):
         self.declare_parameter("plan_topic", "/global_plan")
         self.declare_parameter("world_frame", "world")
         self.declare_parameter("sweep_spacing", 1.5)
-        self.declare_parameter("closing_threshold", 10.0)
+        self.declare_parameter("closing_threshold", 1.0)
         self.declare_parameter("gps_topic", "/fix")
         self.declare_parameter("mission_status_topic", "/mission_status")
         self.declare_parameter("osm_plan_service", "/plan_osm_path")
@@ -88,6 +133,8 @@ class PolygonCoveragePlanner(Node):
             self.get_parameter("closing_threshold")
             .get_parameter_value().double_value
         )
+        if self._sweep_spacing <= 0.0 or self._closing_threshold <= 0.0:
+            raise ValueError("sweep_spacing and closing_threshold must be positive")
         gps_topic = (
             self.get_parameter("gps_topic")
             .get_parameter_value().string_value
@@ -118,12 +165,13 @@ class PolygonCoveragePlanner(Node):
         # ---- 异步通勤状态 ----
         self._pending_cpp_points = []   # 等待通勤响应期间的 CPP 点阵
         self._pending_min_idx = 0       # 等待通勤响应期间的接入索引
+        self._request_generation = 0    # 隔离过期的异步 OSM 响应
 
         # ---- OSM 离线路由客户端 ----
         self._osm_client = self.create_client(PlanPath, osm_plan_service)
-        while not self._osm_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().info(
-                f"等待 {osm_plan_service} 服务就绪 ..."
+        if not self._osm_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warn(
+                f"{osm_plan_service} 暂未就绪；规划时将降级为直接下发覆盖路径"
             )
 
         # ---- 发布 / 订阅 ----
@@ -187,13 +235,7 @@ class PolygonCoveragePlanner(Node):
             x - self._vertices[0][0], y - self._vertices[0][1]
         )
 
-        if dist_to_first < self._closing_threshold:
-            if len(self._vertices) < 3:
-                self.get_logger().warn(
-                    f"多边形至少需要 3 个顶点 (当前 {len(self._vertices)} 个)，忽略闭合点击"
-                )
-                return
-
+        if dist_to_first < self._closing_threshold and len(self._vertices) >= 3:
             self.get_logger().info(
                 f"\033[36m[CPP] Polygon closed! "
                 f"{len(self._vertices)} vertices → generating coverage path...\033[0m"
@@ -229,8 +271,10 @@ class PolygonCoveragePlanner(Node):
 
     def _goal_pose_callback(self, msg: PoseStamped):
         """监听到 /goal_pose → 用户正在使用 P2P 导航，清空 CPP 记忆。"""
-        if self.current_cpp_points:
+        if self.current_cpp_points or self._pending_cpp_points:
             self.current_cpp_points = []
+            self._pending_cpp_points = []
+            self._request_generation += 1
             self.get_logger().warn(
                 "\033[33m[WARN] Manual navigation detected. "
                 "Clearing patrol memory.\033[0m"
@@ -279,17 +323,19 @@ class PolygonCoveragePlanner(Node):
         entry_x, entry_y = cpp_points[min_idx]
 
         # ---- 存储待定状态（回调中拼接） ----
+        self._request_generation += 1
+        generation = self._request_generation
         self._pending_cpp_points = cpp_points
         self._pending_min_idx = min_idx
 
         # ---- 异步调用 OSM 离线路由 ----
-        self._request_transit_path_async(entry_x, entry_y)
+        self._request_transit_path_async(entry_x, entry_y, generation)
 
     # ------------------------------------------------------------------
     #  OSM 异步通勤路径请求
     # ------------------------------------------------------------------
 
-    def _request_transit_path_async(self, dest_x, dest_y):
+    def _request_transit_path_async(self, dest_x, dest_y, generation):
         """异步调用 /plan_osm_path 获取从当前位置到作业起点的拓扑路径。
 
         稳健性降级:
@@ -301,7 +347,7 @@ class PolygonCoveragePlanner(Node):
         """
         if self._current_lat is None or self._origin_lat is None:
             self.get_logger().warn("GPS 未就绪，跳过通勤段，直接下发 CPP")
-            self._dispatch_without_transit()
+            self._dispatch_without_transit(generation)
             return
 
         cur_x, cur_y, _ = _latlon_to_local(
@@ -314,7 +360,12 @@ class PolygonCoveragePlanner(Node):
             self.get_logger().info(
                 f"距离作业起点 {dist:.1f}m < 10m，跳过通勤段"
             )
-            self._dispatch_without_transit()
+            self._dispatch_without_transit(generation)
+            return
+
+        if not self._osm_client.service_is_ready():
+            self.get_logger().warn("OSM 路由服务未就绪，直接下发 CPP")
+            self._dispatch_without_transit(generation)
             return
 
         req = PlanPath.Request()
@@ -329,10 +380,15 @@ class PolygonCoveragePlanner(Node):
         )
 
         future = self._osm_client.call_async(req)
-        future.add_done_callback(self._on_transit_response)
+        future.add_done_callback(
+            lambda done_future: self._on_transit_response(done_future, generation)
+        )
 
-    def _on_transit_response(self, future):
+    def _on_transit_response(self, future, generation):
         """OSM 通勤路径异步回调：拼接 Transit + CPP[min_idx:] 并下发。"""
+        if generation != self._request_generation:
+            self.get_logger().warn("忽略已过期的 OSM 通勤响应")
+            return
         cpp_points = self._pending_cpp_points
         min_idx = self._pending_min_idx
 
@@ -372,8 +428,10 @@ class PolygonCoveragePlanner(Node):
             f"(slice from idx {min_idx})."
         )
 
-    def _dispatch_without_transit(self):
+    def _dispatch_without_transit(self, generation):
         """跳过通勤段，直接下发 CPP（从接入点开始）。"""
+        if generation != self._request_generation:
+            return
         cpp_points = self._pending_cpp_points
         min_idx = self._pending_min_idx
         if not cpp_points:
@@ -492,7 +550,15 @@ class PolygonCoveragePlanner(Node):
                 pts = list(seg.coords)
                 if row_idx % 2 == 1:
                     pts.reverse()
-                path_points.extend(pts)
+                if path_points:
+                    connector = _safe_connector(rotated, path_points[-1], pts[0])
+                    if connector is None:
+                        self.get_logger().warn("跳过无法在作业区内连接的扫掠线段")
+                        continue
+                    path_points.extend(connector[1:])
+                    path_points.extend(pts[1:])
+                else:
+                    path_points.extend(pts)
 
         cos_t = math.cos(theta)
         sin_t = math.sin(theta)

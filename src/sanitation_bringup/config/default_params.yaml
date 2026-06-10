@@ -6,11 +6,16 @@
 # ---- 模拟摄像头 ----
 mock_camera_node:
   ros__parameters:
-    video_path: ""                         # 空则自动查找 data/test_video.mp4
+    video_path: ""                         # 空则自动查找 data/videos/test_video.mp4
     frame_width: 640
     frame_height: 480
     publish_rate: 15.0                     # Hz
     topic: "/camera/image_raw"
+    camera_info_topic: "/camera/camera_info"
+    frame_id: "camera_optical_frame"
+    focal_length_px: 480.0                  # Mock 近似值；真实相机必须使用标定内参
+    principal_point_x: -1.0                 # <0 时使用图像中心
+    principal_point_y: -1.0
 
 # ---- 目标检测 ----
 detection_node:
@@ -41,6 +46,7 @@ mock_gps_node:
     frame_id: "gps_link"
     world_frame: "world"
     plan_topic: "/global_plan"
+    odom_topic: "/odom"
     origin_lat: 30.747903
     origin_lon: 103.925269
     noise_stddev: 0.000001                    # 静止时 GPS 噪声标准差 (°)
@@ -65,7 +71,7 @@ polygon_coverage_planner:
     plan_topic: "/global_plan"
     world_frame: "world"
     sweep_spacing: 1.5                       # 扫掠线间距 (m)
-    closing_threshold: 10.0                  # 多边形闭合判定距离 (m)
+    closing_threshold: 1.0                  # 多边形闭合判定距离 (m)
     gps_topic: "/fix"
     mission_status_topic: "/mission_status"
     osm_plan_service: "/plan_osm_path"
@@ -74,7 +80,8 @@ polygon_coverage_planner:
 # ---- 地面过滤 ----
 ground_filter_node:
   ros__parameters:
-    input_topic: "/camera/depth_points"
+    input_topic: "/depth_anything_v3/output/point_cloud"
+    input_convention: "optical"
     output_topic: "/depth_anything/points_filtered"
     filter_mode: "bev_adaptive"               # "pass_through" 或 "bev_adaptive"
     min_z: 0.08                               # pass_through模式: 障碍物最低高度 (m)
@@ -104,22 +111,3 @@ waypoint_patrol_node:
     max_linear: 0.4                        # 最大线速度 (m/s)
     max_angular: 0.8                       # 最大角速度 (rad/s)
     waypoints: [1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0]
-
-# ---- 深度估计 → 点云 (Phase 1) ----
-depth_to_cloud_node:
-  ros__parameters:
-    video_path: ""                       # 空则自动查找 data/test_video.mp4
-    encoder: "vits"
-    weights_path: ""                      # 空则自动查找 data/depth_anything_v2_vits.pth
-    depth_anything_home: ""               # Depth-Anything-V2 根目录
-    device: "auto"                         # "cuda", "cpu", or "auto"
-    inference_rate: 10.0                   # Hz
-    pointcloud_topic: "/camera/depth_points"
-    stride: 4                              # 下采样步长 (4 ≈ 19k pts)
-    min_depth: 0.1                         # 最小深度 (m)
-    max_depth: 10.0                        # 最大深度 (m)
-    camera_height: 0.0                     # ← 纯相机帧！坐标系偏移由TF的camera_z负责
-    target_width: 640
-    target_height: 480
-    depth_scale: 1.5                       # ← 深度缩放校准
-    depth_inverse: false                   # true=逆深度/视差模式

@@ -10,7 +10,7 @@ import random
 
 import rclpy
 from rclpy.node import Node
-from nav_msgs.msg import Path
+from nav_msgs.msg import Path, Odometry
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 
@@ -76,6 +76,7 @@ class MockGpsNode(Node):
         self.declare_parameter("frame_id", "gps_link")
         self.declare_parameter("world_frame", "world")
         self.declare_parameter("plan_topic", "/global_plan")
+        self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("origin_lat", 30.744154)
         self.declare_parameter("origin_lon", 103.925233)
         self.declare_parameter("noise_stddev", 0.000001)  # ~0.1m
@@ -88,9 +89,12 @@ class MockGpsNode(Node):
         self._frame_id = self.get_parameter("frame_id").get_parameter_value().string_value
         self._world_frame = self.get_parameter("world_frame").get_parameter_value().string_value
         self._plan_topic = self.get_parameter("plan_topic").get_parameter_value().string_value
+        odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
         self._origin_lat = self.get_parameter("origin_lat").get_parameter_value().double_value
         self._origin_lon = self.get_parameter("origin_lon").get_parameter_value().double_value
         self._noise_stddev = self.get_parameter("noise_stddev").get_parameter_value().double_value
+        if rate <= 0.0 or self._speed < 0.0 or self._noise_stddev < 0.0:
+            raise ValueError("publish_rate, speed and noise_stddev are invalid")
 
         # ---- TF ----
         if HAS_TF:
@@ -112,11 +116,17 @@ class MockGpsNode(Node):
         self._target_idx = 0           # 当前目标路径点索引
         self._current_x = 0.0          # 狗的当前 X 坐标（局部平面）
         self._current_y = 0.0          # 狗的当前 Y 坐标（局部平面）
+        self._odom_x = 0.0
+        self._odom_y = 0.0
+        self._odom_yaw = 0.0
         self._log_counter = 0          # 限频日志计数器（每 N 帧打印一次）
 
         # ---- 订阅 ----
         self._plan_sub = self.create_subscription(
             Path, self._plan_topic, self._path_callback, 10
+        )
+        self._odom_sub = self.create_subscription(
+            Odometry, odom_topic, self._odom_callback, 10
         )
 
         # ---- 任务状态发布 ----
@@ -129,6 +139,15 @@ class MockGpsNode(Node):
     # ------------------------------------------------------------------
     #  订阅回调
     # ------------------------------------------------------------------
+
+    def _odom_callback(self, msg: Odometry):
+        self._odom_x = msg.pose.pose.position.x
+        self._odom_y = msg.pose.pose.position.y
+        q = msg.pose.pose.orientation
+        self._odom_yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
 
     def _path_callback(self, msg: Path):
         """接收全局路径 — 不瞬移，狗从当前位置走向路径起点"""
@@ -296,7 +315,7 @@ class MockGpsNode(Node):
     def _publish_fix(self, lat, lon, alt):
         msg = NavSatFix()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "gps_link"
+        msg.header.frame_id = self._frame_id
         msg.latitude = lat
         msg.longitude = lon
         msg.altitude = 0.0
@@ -316,15 +335,20 @@ class MockGpsNode(Node):
         # 从 Yaw（绕 Z 轴旋转）计算四元数
         # 公式：当 roll=0, pitch=0 时
         # qx=0, qy=0, qz=sin(yaw/2), qw=cos(yaw/2)
-        qz = math.sin(yaw / 2.0)
-        qw = math.cos(yaw / 2.0)
+        world_odom_yaw = yaw - self._odom_yaw
+        cos_yaw = math.cos(world_odom_yaw)
+        sin_yaw = math.sin(world_odom_yaw)
+        world_odom_x = x - (cos_yaw * self._odom_x - sin_yaw * self._odom_y)
+        world_odom_y = y - (sin_yaw * self._odom_x + cos_yaw * self._odom_y)
+        qz = math.sin(world_odom_yaw / 2.0)
+        qw = math.cos(world_odom_yaw / 2.0)
         
         tf_msg = TransformStamped()
         tf_msg.header.stamp = self.get_clock().now().to_msg()
         tf_msg.header.frame_id = self._world_frame
         tf_msg.child_frame_id = "odom"
-        tf_msg.transform.translation.x = x
-        tf_msg.transform.translation.y = y
+        tf_msg.transform.translation.x = world_odom_x
+        tf_msg.transform.translation.y = world_odom_y
         tf_msg.transform.translation.z = 0.0
         # ========== 关键：设置旋转（狗头朝向） ==========
         tf_msg.transform.rotation.x = 0.0

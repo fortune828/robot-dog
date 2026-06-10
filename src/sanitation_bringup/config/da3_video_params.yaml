@@ -1,0 +1,48 @@
+mock_camera_node:
+  ros__parameters:
+    video_path: "/home/ubuntu/bl/workspace/robot-dog/data/videos/test_video.mp4"
+    frame_width: 1280
+    frame_height: 720
+    publish_rate: 10.0
+    topic: "/camera/image_raw"
+    camera_info_topic: "/camera/camera_info"
+    frame_id: "camera_optical_frame"
+    focal_length_px: 960.0  # iPhone 视频实验近似值，真实部署必须替换为标定结果
+    principal_point_x: -1.0
+    principal_point_y: -1.0
+
+depth_anything_v3:
+  ros__parameters:
+    onnx_path: "models/DA3METRIC-LARGE.fp16-batch1.engine"
+    precision: "fp16"
+    sky_threshold: 0.3
+    sky_depth_cap: 50.0
+    enable_point_cloud: true
+    point_cloud_downsample_factor: 4
+    colorize_point_cloud: false
+    enable_debug: false
+    debug_colormap: "VIRIDIS"
+    debug_filepath: "/tmp/depth_anything_v3_debug/"
+    write_colormap: false
+    debug_colormap_min_depth: 0.0
+    debug_colormap_max_depth: 20.0
+
+ground_filter_node:
+  ros__parameters:
+    input_topic: "/depth_anything_v3/output/point_cloud"
+    input_convention: "optical"
+    output_topic: "/depth_anything/points_filtered"
+    output_frame: "camera_link"
+    filter_mode: "bev_adaptive"
+    blind_spot: 0.3
+    min_z: 0.08
+    max_z: 1.5
+    bev_resolution: 0.15
+    bev_height_diff: 0.12
+    camera_x: 0.15
+    camera_y: 0.0
+    camera_z: 1.0
+    camera_roll: 0.0
+    camera_pitch: 0.0
+    camera_yaw: 0.0
+    log_interval: 0

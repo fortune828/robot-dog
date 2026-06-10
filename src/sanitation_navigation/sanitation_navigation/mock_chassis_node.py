@@ -66,6 +66,8 @@ class MockChassisNode(Node):
 
         # ---- 定时器 ----
         rate = self.get_parameter("update_rate").get_parameter_value().double_value
+        if rate <= 0.0:
+            raise ValueError("update_rate must be positive")
         self._timer = self.create_timer(1.0 / rate, self._publish_odometry)
 
         origin_lat = self.get_parameter("gps_origin_lat").get_parameter_value().double_value

@@ -68,6 +68,8 @@ class WaypointPatrolNode(Node):
 
         # ---- 定时控制循环 ----
         rate = self.get_parameter("control_rate").get_parameter_value().double_value
+        if rate <= 0.0:
+            raise ValueError("control_rate must be positive")
         self._timer = self.create_timer(1.0 / rate, self._control_loop)
 
         self.get_logger().info(
@@ -99,7 +101,7 @@ class WaypointPatrolNode(Node):
             self._odom_received = True
 
     def _control_loop(self):
-        if not self._waypoints:
+        if not self._waypoints or not self._odom_received:
             return
 
         target = self._waypoints[self._current_wp_idx]

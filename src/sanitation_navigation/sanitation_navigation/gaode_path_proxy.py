@@ -233,14 +233,9 @@ class GaodePathProxy(Node):
             "key": self._api_key,
         }
 
-        # 构造完整的 URL 用于调试透传
-        debug_url = f"{AMAP_WALKING_URL}?origin={params['origin']}&destination={params['destination']}&key={self._api_key}"
-        self.get_logger().info(
-            f"[DEBUG] Amap Request: {debug_url}"
-        )
         self.get_logger().debug(
-            f"[DEBUG] Requesting Path: Start({self._current_lat:.6f},{self._current_lon:.6f}) "
-            f"-> End({goal_lat:.6f},{goal_lon:.6f})"
+            f"Amap request: origin={params['origin']} "
+            f"destination={params['destination']} key=<redacted>"
         )
 
         try:

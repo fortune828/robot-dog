@@ -69,7 +69,7 @@ def generate_launch_description():
         executable="mock_camera_node",
         name="mock_camera_node",
         output="screen",
-        parameters=[default_config, {"video_path": video_path}],
+        parameters=[default_config, {"video_path": video_path, "use_sim_time": use_sim_time}],
         arguments=["--ros-args", "--log-level", "info"],
     )
 
@@ -79,7 +79,7 @@ def generate_launch_description():
         executable="detection_node",
         name="detection_node",
         output="screen",
-        parameters=[default_config],
+        parameters=[default_config, {"use_sim_time": use_sim_time}],
         arguments=["--ros-args", "--log-level", "warn"],
     )
 
@@ -89,7 +89,7 @@ def generate_launch_description():
         executable="mock_chassis_node",
         name="mock_chassis_node",
         output="screen",
-        parameters=[default_config],
+        parameters=[default_config, {"use_sim_time": use_sim_time}],
         arguments=["--ros-args", "--log-level", "warn"],
     )
 
@@ -99,7 +99,7 @@ def generate_launch_description():
         executable="mock_gps_node",
         name="mock_gps_node",
         output="screen",
-        parameters=[default_config],
+        parameters=[default_config, {"use_sim_time": use_sim_time}],
         arguments=["--ros-args", "--log-level", "info"],
     )
 
@@ -112,7 +112,7 @@ def generate_launch_description():
         executable="osm_map_manager",
         name="osm_map_manager",
         output="screen",
-        parameters=[default_config],
+        parameters=[default_config, {"use_sim_time": use_sim_time}],
         arguments=["--ros-args", "--log-level", "info"],
     )
 
@@ -122,7 +122,7 @@ def generate_launch_description():
         executable="polygon_coverage_planner",
         name="polygon_coverage_planner",
         output="screen",
-        parameters=[default_config],
+        parameters=[default_config, {"use_sim_time": use_sim_time}],
         arguments=["--ros-args", "--log-level", "info"],
     )
 

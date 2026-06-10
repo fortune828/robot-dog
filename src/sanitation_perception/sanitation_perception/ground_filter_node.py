@@ -1,9 +1,6 @@
 """ground_filter_node.py — 3D coordinate transform + spatial filter.
 
-Subscribes to raw point cloud from depth_to_cloud_node.
-The depth_to_cloud_node already outputs in ROS standard camera frame
-(X=forward, Y=left, Z=up, frame_id=camera_link), so NO optical→camera
-transform is needed here.
+Optional debug node for filtering the DA3 wrapper PointCloud2 output.
 
 Two filtering modes (select via `filter_mode` param):
   "pass_through" — simple Z-axis crop (fast, best for flat ground)
@@ -13,9 +10,8 @@ Also publishes the missing static TF base_link → camera_link so the TF tree
 is complete for Nav2 sensor transforms.
 
 Transform chain:
-    1. Depth-to-Cloud already outputs in camera standard frame (no step 1 needed)
-    2. Camera → Base link: pitch rotation around Y (no height offset — already
-       compensated in depth_to_cloud back-projection)
+    1. Convert DA3 optical coordinates when input_convention=optical
+    2. Camera → Base link: pitch rotation around Y
     3. Spatial filter in base_link frame: X > blind_spot & points above ground
 """
 
@@ -40,7 +36,8 @@ class GroundFilterNode(Node):
         super().__init__("ground_filter_node")
 
         # ---- parameters ----
-        self.declare_parameter("input_topic", "/camera/depth_points")
+        self.declare_parameter("input_topic", "/depth_anything_v3/output/point_cloud")
+        self.declare_parameter("input_convention", "optical")
         self.declare_parameter("output_topic", "/depth_anything/points_filtered")
         self.declare_parameter("filter_mode", "bev_adaptive")
         self.declare_parameter("min_z", 0.08)     # 与 YAML 一致
@@ -52,25 +49,39 @@ class GroundFilterNode(Node):
         self.declare_parameter("log_interval", 30)
         self.declare_parameter("bev_resolution", 0.15)   # 与 YAML 一致
         self.declare_parameter("bev_height_diff", 0.12) # 与 YAML 一致
+        self.declare_parameter("camera_x", 0.15)
+        self.declare_parameter("camera_y", 0.0)
+        self.declare_parameter("camera_z", 1.0)
+        self.declare_parameter("camera_roll", 0.0)
+        self.declare_parameter("camera_pitch", 0.0)
+        self.declare_parameter("camera_yaw", 0.0)
 
         input_topic = self.get_parameter("input_topic").get_parameter_value().string_value
+        self._input_convention = self.get_parameter("input_convention").get_parameter_value().string_value.lower()
         output_topic = self.get_parameter("output_topic").get_parameter_value().string_value
         self._filter_mode = self.get_parameter("filter_mode").get_parameter_value().string_value
         self._min_z = self.get_parameter("min_z").get_parameter_value().double_value
         self._max_z = self.get_parameter("max_z").get_parameter_value().double_value
         self._output_frame = self.get_parameter("output_frame").get_parameter_value().string_value
         self._blind_spot = self.get_parameter("blind_spot").get_parameter_value().double_value
-        self._camera_height = self.get_parameter("camera_height").get_parameter_value().double_value
+        configured_height = self.get_parameter("camera_height").get_parameter_value().double_value
+        self._camera_x = self.get_parameter("camera_x").get_parameter_value().double_value
+        self._camera_height = self.get_parameter("camera_z").get_parameter_value().double_value
         _pitch_deg = self.get_parameter("camera_pitch_deg").get_parameter_value().double_value
+        configured_pitch = self.get_parameter("camera_pitch").get_parameter_value().double_value
         self._log_interval = self.get_parameter("log_interval").get_parameter_value().integer_value
         self._bev_res = self.get_parameter("bev_resolution").get_parameter_value().double_value
         self._bev_diff = self.get_parameter("bev_height_diff").get_parameter_value().double_value
+        if self._input_convention not in ("standard", "optical"):
+            raise ValueError("input_convention must be standard or optical")
 
         # precompute pitch rotation trig
         import math
-        _pitch_rad = math.radians(_pitch_deg)
-        self._cos_pitch = math.cos(_pitch_rad)
-        self._sin_pitch = math.sin(_pitch_rad)
+        self._camera_pitch_rad = configured_pitch if abs(configured_pitch) > 1e-9 else math.radians(_pitch_deg)
+        if abs(configured_height - self._camera_height) > 1e-6:
+            self.get_logger().warn("camera_height differs from camera_z; using camera_z for filtering and TF")
+        self._cos_pitch = math.cos(self._camera_pitch_rad)
+        self._sin_pitch = math.sin(self._camera_pitch_rad)
 
         # ---- static TF: base_link → camera_link ----
         self._publish_static_tf()
@@ -85,7 +96,7 @@ class GroundFilterNode(Node):
 
         self.get_logger().info(
             f"GroundFilter ready | {input_topic} → {output_topic} | "
-            f"mode={self._filter_mode} | "
+            f"mode={self._filter_mode} | input={self._input_convention} | "
             f"h={self._camera_height:.2f}m pitch={_pitch_deg:.1f}° | "
             f"X>{self._blind_spot:.2f}m "
             f"Z∈[{self._min_z:.2f}, {self._max_z:.2f}]m | "
@@ -107,19 +118,12 @@ class GroundFilterNode(Node):
             self.get_logger().warn("tf2_ros unavailable, skipping static TF")
             return
 
-        self.declare_parameter("camera_x", 0.15)
-        self.declare_parameter("camera_y", 0.0)
-        self.declare_parameter("camera_z", 1.0)
-        self.declare_parameter("camera_roll", 0.0)
-        self.declare_parameter("camera_pitch", 0.0)
-        self.declare_parameter("camera_yaw", 0.0)
-
         import math
-        cx = self.get_parameter("camera_x").get_parameter_value().double_value
+        cx = self._camera_x
         cy = self.get_parameter("camera_y").get_parameter_value().double_value
-        cz = self.get_parameter("camera_z").get_parameter_value().double_value
+        cz = self._camera_height
         roll = self.get_parameter("camera_roll").get_parameter_value().double_value
-        pitch = self.get_parameter("camera_pitch").get_parameter_value().double_value
+        pitch = self._camera_pitch_rad
         yaw = self.get_parameter("camera_yaw").get_parameter_value().double_value
 
         tf_broadcaster = StaticTransformBroadcaster(self)
@@ -158,37 +162,42 @@ class GroundFilterNode(Node):
         if n_points == 0:
             return
 
-        # depth_to_cloud_node 输出纯相机帧 (X=forward, Y=left, Z=up, origin at camera)
-        # TF base_link→camera_link 负责所有坐标变换，此处只做空间过滤
-        data = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
-        X_cam = data[:, 0]   # forward
-        Y_cam = data[:, 1]   # left
-        Z_cam = data[:, 2]   # up (relative to camera center)
-        intensity = data[:, 3]
+        if msg.is_bigendian or msg.point_step < 12 or msg.point_step % 4 != 0 or len(msg.data) % msg.point_step != 0:
+            self.get_logger().error("Unsupported PointCloud2 layout; expected little-endian float32 XYZ[+field]")
+            return
 
-        # ---- blind spot filter ----
-        fwd_mask = X_cam > self._blind_spot
+        floats_per_point = msg.point_step // 4
+        data = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, floats_per_point)
+        if self._input_convention == "optical":
+            # ROS optical: X right, Y down, Z forward -> standard: X forward, Y left, Z up.
+            X_cam = data[:, 2]
+            Y_cam = -data[:, 0]
+            Z_cam = -data[:, 1]
+        else:
+            X_cam = data[:, 0]
+            Y_cam = data[:, 1]
+            Z_cam = data[:, 2]
+        intensity = data[:, 3] if floats_per_point >= 4 else X_cam
+
+        # Transform to base_link coordinates for filtering; output stays in camera_link.
+        X_base = self._cos_pitch * X_cam + self._sin_pitch * Z_cam + self._camera_x
+        Y_base = Y_cam
+        Z_base = -self._sin_pitch * X_cam + self._cos_pitch * Z_cam + self._camera_height
+
+        # ---- blind spot and invalid-point filter ----
+        finite_mask = np.isfinite(X_base) & np.isfinite(Y_base) & np.isfinite(Z_base)
+        fwd_mask = finite_mask & (X_base > self._blind_spot)
 
         # ---- ground filter (mode-dependent) ----
         if self._filter_mode == "bev_adaptive":
-            height_mask = self._bev_height_filter(X_cam, Y_cam, Z_cam, fwd_mask)
+            height_mask = self._bev_height_filter(X_base, Y_base, Z_base, fwd_mask)
         else:
             # pass_through: 障碍物比地面高 min_z, 绝对高度不超过 max_z
-            ground_z = -self._camera_height
-            height_mask = (Z_cam >= ground_z + self._min_z) & (Z_cam <= self._max_z)
+            height_mask = (Z_base >= self._min_z) & (Z_base <= self._max_z)
 
         mask = fwd_mask & height_mask
 
-        # ---- DIAG: 每10帧输出诊断 ----
         self._frame_seq += 1
-        if self._frame_seq % 10 == 0:
-            self.get_logger().info(
-                f"DIAG frame#{self._frame_seq} | raw={n_points} "
-                f"blind={fwd_mask.sum()} filt={mask.sum()} "
-                f"Z_in=[{Z_cam.min():.2f},{Z_cam.max():.2f}] "
-                f"Z_out=[{Z_cam[mask].min():.3f},{Z_cam[mask].max():.3f}] "
-                f"mode={self._filter_mode}"
-            )
 
         # ---- repack ----
         filtered = np.column_stack([
@@ -213,7 +222,6 @@ class GroundFilterNode(Node):
         self._pub.publish(out)
 
         # ---- stats ----
-        self._frame_seq += 1
         if self._log_interval > 0 and self._frame_seq % self._log_interval == 0:
             kept_pct = 100.0 * filtered.shape[0] / n_points if n_points else 0
             self.get_logger().info(
@@ -227,30 +235,28 @@ class GroundFilterNode(Node):
     # ------------------------------------------------------------------
 
     def _bev_height_filter(self, X, Y, Z, valid_mask):
-        """简化的 BEV 自适应地面过滤。
+        """Estimate a local ground level in each BEV cell and retain raised points."""
+        result = np.zeros(len(Z), dtype=bool)
+        valid_indices = np.flatnonzero(valid_mask)
+        if valid_indices.size == 0:
+            return result
+        if self._bev_res <= 0.0:
+            return result
 
-        使用全局地面高度（Z 的 5 分位数）作为基准，而非 per-cell min-Z。
-        这避免了"cell 内只有障碍物、无地面参照"导致的漏检问题。
-        """
-        n_total = len(Z)
-        if not np.any(valid_mask):
-            return np.zeros(n_total, dtype=bool)
+        Xv, Yv, Zv = X[valid_mask], Y[valid_mask], Z[valid_mask]
+        cells = np.column_stack((
+            np.floor(Xv / self._bev_res).astype(np.int64),
+            np.floor(Yv / self._bev_res).astype(np.int64),
+        ))
+        _, inverse = np.unique(cells, axis=0, return_inverse=True)
+        local_ground = np.full(inverse.max() + 1, np.inf, dtype=np.float32)
+        np.minimum.at(local_ground, inverse, Zv)
+        ground_for_point = local_ground[inverse]
 
-        Zv = Z[valid_mask]
-
-        # 全局地面高度: 取 Z 最小的 5% 的中位数作为地面基准
-        n_valid = len(Zv)
-        k_ground = max(1, int(n_valid * 0.05))
-        ground_z = float(np.partition(Zv, k_ground)[k_ground])
-
-        # 高于地面 bev_height_diff 的为障碍物
-        is_obstacle = (Zv - ground_z) > self._bev_diff
-
-        # 额外上限: 太高 (天空/树冠) 忽略
-        is_obstacle &= Zv < (ground_z + self._max_z)
-
-        result = np.zeros(n_total, dtype=bool)
-        result[np.where(valid_mask)[0]] = is_obstacle
+        min_height = max(self._min_z, self._bev_diff)
+        is_obstacle = (Zv - ground_for_point) >= min_height
+        is_obstacle &= (Zv - ground_for_point) <= self._max_z
+        result[valid_indices] = is_obstacle
         return result
 
 
@@ -263,7 +269,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

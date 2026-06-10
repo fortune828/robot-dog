@@ -17,5 +17,4 @@ setup(
     maintainer_email="robotdog@example.com",
     description="Pure Python core algorithms for sanitation robot",
     license="Apache-2.0",
-    tests_require=["pytest"],
 )

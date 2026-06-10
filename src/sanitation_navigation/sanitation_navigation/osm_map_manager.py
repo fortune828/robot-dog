@@ -401,14 +401,36 @@ class OsmMapManager(Node):
         except Exception as e:
             return [], False, f"路径搜索异常: {e}"
 
-        # Node 坐标 → ENU
-        path_enu = []
-        for nid in path_nodes:
-            ndata = self._graph.nodes[nid]
-            x, y = _latlon_to_local(
-                ndata["y"], ndata["x"], self._origin_lat, self._origin_lon,
+        # 保留道路边 geometry 中的弯道点，避免节点间直线穿出道路。
+        path_enu = [(start_x, start_y)]
+        for u, v in zip(path_nodes, path_nodes[1:]):
+            edge_group = self._graph.get_edge_data(u, v) or {}
+            if not edge_group:
+                continue
+            edge = min(
+                edge_group.values(),
+                key=lambda data: data.get("length", float("inf")),
             )
-            path_enu.append((x, y))
+            if "geometry" in edge:
+                coords = list(edge["geometry"].coords)
+                u_node = self._graph.nodes[u]
+                first_dist = (coords[0][0] - u_node["x"]) ** 2 + (coords[0][1] - u_node["y"]) ** 2
+                last_dist = (coords[-1][0] - u_node["x"]) ** 2 + (coords[-1][1] - u_node["y"]) ** 2
+                if last_dist < first_dist:
+                    coords.reverse()
+            else:
+                coords = [
+                    (self._graph.nodes[u]["x"], self._graph.nodes[u]["y"]),
+                    (self._graph.nodes[v]["x"], self._graph.nodes[v]["y"]),
+                ]
+
+            for lon, lat in coords:
+                point = _latlon_to_local(lat, lon, self._origin_lat, self._origin_lon)
+                if math.hypot(point[0] - path_enu[-1][0], point[1] - path_enu[-1][1]) > 0.01:
+                    path_enu.append(point)
+
+        if math.hypot(goal_x - path_enu[-1][0], goal_y - path_enu[-1][1]) > 0.01:
+            path_enu.append((goal_x, goal_y))
 
         return path_enu, True, f"{len(path_enu)} nodes"
 

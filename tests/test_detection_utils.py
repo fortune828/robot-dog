@@ -33,6 +33,16 @@ class TestGenerateMockDetections:
         d2 = generate_mock_detections((480, 640, 3), detection_prob=1.0, max_detections=3, rng=rng2)
         assert d1 == d2
 
+    def test_tiny_frame_stays_valid(self):
+        dets = generate_mock_detections((8, 9, 3), detection_prob=1.0, max_detections=3, rng=random.Random(1))
+        for det in dets:
+            x, y, width, height = det["bbox"]
+            assert x + width <= 9
+            assert y + height <= 8
+
+    def test_nonpositive_max_returns_empty(self):
+        assert generate_mock_detections((100, 100, 3), 1.0, 0) == []
+
     def test_bbox_within_frame(self):
         h, w = 480, 640
         dets = generate_mock_detections((h, w, 3), detection_prob=1.0, max_detections=20, rng=random.Random(0))

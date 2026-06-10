@@ -110,7 +110,8 @@ class DetectionNode(Node):
             return None
         data = np.frombuffer(msg.data, dtype=np.uint8)
         try:
-            return data.reshape((msg.height, msg.width, 3))
+            frame = data.reshape((msg.height, msg.width, 3))
+            return frame[:, :, ::-1] if msg.encoding == "rgb8" else frame
         except ValueError:
             return None
 

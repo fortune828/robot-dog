@@ -76,7 +76,9 @@ def pure_pursuit(
 
     cmd = VelocityCmd()
     cmd.linear = min(max_linear, dist * linear_gain)
-    cmd.angular = max(-max_angular, min(max_angular, angle_error * angular_gain))
+    effective_lookahead = max(lookahead, 1e-3)
+    curvature = 2.0 * math.sin(angle_error) / effective_lookahead
+    cmd.angular = max(-max_angular, min(max_angular, cmd.linear * curvature * angular_gain))
 
     # 角度偏差过大时减速
     if abs(angle_error) > math.pi / 3:
