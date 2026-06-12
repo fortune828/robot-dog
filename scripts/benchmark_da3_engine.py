@@ -1,4 +1,4 @@
-#!/home/ubuntu/bl/miniconda3/envs/cv_deploy/bin/python
+#!/home/ubuntu/bl/miniconda3/envs/robotdog/bin/python
 """Run DA3 TensorRT engine on a video and save side-by-side depth visualization.
 
 Output:

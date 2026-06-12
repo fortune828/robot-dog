@@ -19,9 +19,14 @@ project(depth_anything_v3)
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
 endif()
+option(DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS "Compile custom CUDA preprocess/postprocess kernels" OFF)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  add_compile_options(
+    "$<$<COMPILE_LANGUAGE:CXX>:-Wall>"
+    "$<$<COMPILE_LANGUAGE:CXX>:-Wextra>"
+    "$<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>"
+  )
 endif()
 
 # Find dependencies
@@ -34,11 +39,11 @@ find_package(diagnostic_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(image_transport REQUIRED)
+find_package(console_bridge REQUIRED)
 find_package(OpenCV 4 REQUIRED)
 
 # Find CUDA
 find_package(CUDA REQUIRED)
-# No .cu sources are compiled; CUDA is used through its C++ runtime libraries.
 
 # Find TensorRT
 find_path(TENSORRT_INCLUDE_DIR NvInfer.h
@@ -64,14 +69,36 @@ include_directories(
   ${TENSORRT_INCLUDE_DIR}
   ${CUDA_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
+  ${console_bridge_INCLUDE_DIRS}
 )
 
-# Create TensorRT depth inference library
-add_library(tensorrt_depth_anything SHARED
+set(TENSORRT_DEPTH_ANYTHING_SOURCES
   src/tensorrt_depth_anything/tensorrt_depth_anything.cpp
   src/tensorrt_common/tensorrt_common.cpp
   src/tensorrt_common/simple_profiler.cpp
 )
+
+if(DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS)
+  enable_language(CUDA)
+  if(NOT CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 89)
+  endif()
+  list(APPEND TENSORRT_DEPTH_ANYTHING_SOURCES
+    src/tensorrt_depth_anything/cuda_kernels.cu
+  )
+endif()
+
+# Create TensorRT depth inference library
+add_library(tensorrt_depth_anything SHARED
+  ${TENSORRT_DEPTH_ANYTHING_SOURCES}
+)
+
+set_target_properties(tensorrt_depth_anything PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS)
+  set_target_properties(tensorrt_depth_anything PROPERTIES CUDA_STANDARD 17)
+  target_compile_definitions(tensorrt_depth_anything PUBLIC DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS)
+endif()
 
 target_link_libraries(tensorrt_depth_anything
   ${TENSORRT_LIBRARY}
@@ -98,7 +125,12 @@ add_library(depth_anything_v3_node SHARED
 target_link_libraries(depth_anything_v3_node
   tensorrt_depth_anything
   ${OpenCV_LIBRARIES}
+  console_bridge::console_bridge
 )
+
+if(DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS)
+  target_compile_definitions(depth_anything_v3_node PRIVATE DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS)
+endif()
 
 ament_target_dependencies(depth_anything_v3_node
   rclcpp

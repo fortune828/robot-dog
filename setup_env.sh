@@ -23,12 +23,17 @@ fi
 
 # 3. 工作空间环境
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export ROBOTDOG_ROOT="${_SCRIPT_DIR}"
+export CUDA_HOME="${CONDA_PREFIX}"
+export CUDA_PATH="${CONDA_PREFIX}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"
+export LD_LIBRARY_PATH="${_SCRIPT_DIR}/.local/tensorrt/lib:${CONDA_PREFIX}/lib:${CONDA_PREFIX}/targets/x86_64-linux/lib:${CONDA_PREFIX}/lib/python3.10/site-packages/tensorrt_libs:${LD_LIBRARY_PATH:-}"
 if [ -f "${_SCRIPT_DIR}/install/setup.bash" ]; then
     source "${_SCRIPT_DIR}/install/setup.bash"
 else
     echo "[WARN] 工作空间未编译，请先运行: bash rebuild.sh"
 fi
 
-echo "[INFO] 环境已就绪 | Python: $(python --version) | ROS2: Humble"
+echo "[INFO] 环境已就绪 | Python: $(python --version) | ROS2: Humble | CUDA: ${CUDA_HOME}"
 echo "  启动全 Mock 系统:"
 echo "    ros2 launch sanitation_bringup demo_mock_system.launch.py"

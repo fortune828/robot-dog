@@ -5,8 +5,10 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo, TimerAction
+from launch.conditions import UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -19,6 +21,8 @@ def generate_launch_description():
     video_path = LaunchConfiguration("video_path")
     focal_length_px = LaunchConfiguration("focal_length_px")
     model_path = LaunchConfiguration("model_path")
+    use_gpu_ground_filter = LaunchConfiguration("use_gpu_ground_filter")
+    enable_point_cloud = LaunchConfiguration("enable_point_cloud")
     use_sim_time = LaunchConfiguration("use_sim_time")
 
     camera = Node(
@@ -42,11 +46,13 @@ def generate_launch_description():
             ("~/input/camera_info", "/camera/camera_info"),
             ("~/output/depth_image", "/depth_anything_v3/output/depth_image"),
             ("~/output/point_cloud", "/depth_anything_v3/output/point_cloud"),
+            ("~/output/filtered_point_cloud", "/depth_anything/points_filtered"),
             ("~/output/depth_image_debug", "/depth_anything_v3/output/depth_image_debug"),
         ],
         parameters=[config, {
             "onnx_path": model_path,
-            "enable_point_cloud": True,
+            "enable_gpu_ground_filter": ParameterValue(use_gpu_ground_filter, value_type=bool),
+            "enable_point_cloud": ParameterValue(enable_point_cloud, value_type=bool),
             "use_sim_time": use_sim_time,
         }],
     )
@@ -55,6 +61,7 @@ def generate_launch_description():
         executable="ground_filter_node",
         name="ground_filter_node",
         output="screen",
+        condition=UnlessCondition(use_gpu_ground_filter),
         parameters=[config, {"use_sim_time": use_sim_time}],
     )
     costmap = Node(
@@ -79,8 +86,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument("focal_length_px", default_value="960.0"),
         DeclareLaunchArgument("model_path", default_value="models/DA3METRIC-LARGE.fp16-batch1.engine"),
+        DeclareLaunchArgument("use_gpu_ground_filter", default_value="true"),
+        DeclareLaunchArgument("enable_point_cloud", default_value="false"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
-        LogInfo(msg="Default pipeline: camera -> DA3 PointCloud2 -> ground filter -> costmap -> A*."),
+        LogInfo(msg="Default pipeline: camera -> DA3 GPU filtered cloud -> costmap -> A*."),
         camera,
         TimerAction(period=1.0, actions=[da3, ground_filter, costmap, planner]),
     ])

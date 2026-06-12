@@ -27,10 +27,14 @@
 #include <iostream>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/point_field.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include "depth_anything_v3/tensorrt_depth_anything.hpp"
+#ifdef DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS
+#include "depth_anything_v3/cuda_kernels.hpp"
+#endif
 #include "cuda_utils/cuda_check_error.hpp"
 #include "cuda_utils/cuda_unique_ptr.hpp"
 
@@ -154,9 +158,11 @@ namespace depth_anything_v3
 TensorRTDepthAnything::TensorRTDepthAnything(
   const std::string & model_path, const std::string & precision,
   tensorrt_common::BuildConfig build_config, const bool use_gpu_preprocess,
-  std::string /* calibration_image_list_path */, const tensorrt_common::BatchConfig & batch_config,
-  const size_t max_workspace_size)
-: batch_size_(batch_config[2]), use_gpu_preprocess_(use_gpu_preprocess)
+  const bool use_gpu_postprocess, std::string /* calibration_image_list_path */,
+  const tensorrt_common::BatchConfig & batch_config, const size_t max_workspace_size)
+: batch_size_(batch_config[2]),
+  use_gpu_preprocess_(use_gpu_preprocess),
+  use_gpu_postprocess_(use_gpu_postprocess)
 {
   src_width_ = -1;
   src_height_ = -1;
@@ -217,12 +223,8 @@ void TensorRTDepthAnything::initPreprocessBuffer(int width, int height)
   scale_x_ = static_cast<double>(input_width_) / static_cast<double>(src_width_);
   scale_y_ = static_cast<double>(input_height_) / static_cast<double>(src_height_);
   
-  if (use_gpu_preprocess_) {
-    const size_t image_size = src_width_ * src_height_ * 3; // RGB
-    image_buf_h_ = cuda_utils::make_unique_host<unsigned char[]>(
-      image_size * batch_size_, cudaHostAllocDefault);
-    image_buf_d_ = cuda_utils::make_unique<unsigned char[]>(image_size * batch_size_);
-  }
+  const size_t image_size = static_cast<size_t>(src_width_) * src_height_ * 3;
+  image_buf_d_ = cuda_utils::make_unique<unsigned char[]>(image_size * batch_size_);
 }
 
 bool TensorRTDepthAnything::doInference(
@@ -245,7 +247,6 @@ bool TensorRTDepthAnything::doInference(
     return false;
   }
 
-  // Preprocess (GPU preprocessing not yet implemented, using CPU)
   const auto preprocess_start = Clock::now();
   preprocess(images);
   profiling_.preprocess_ms = elapsedMs(preprocess_start);
@@ -278,45 +279,66 @@ void TensorRTDepthAnything::preprocess(const std::vector<cv::Mat> & images)
   scale_y_ = static_cast<double>(input_height_) / static_cast<double>(src_height_);
 
 
-  std::vector<cv::Mat> resized_images;
-  resized_images.reserve(batch_size);
-  for (const auto & image : images) {
-    cv::Mat resized_image;
-    cv::resize(image, resized_image, cv::Size(input_width_, input_height_), 0, 0, cv::INTER_CUBIC);
-    resized_images.emplace_back(resized_image);
-  }
-
   const size_t volume = batch_size * input_chan * input_height_ * input_width_;
-  input_h_.assign(volume, 0.0f);
+#ifdef DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS
+  if (input_chan == 3 && use_gpu_preprocess_ && image_buf_d_) {
+    const size_t image_bytes = static_cast<size_t>(src_width_) * src_height_ * 3;
+    for (size_t n = 0; n < batch_size; ++n) {
+      const auto & image = images[n];
+      unsigned char * batch_image_d = image_buf_d_.get() + n * image_bytes;
+      float * batch_input_d = input_d_.get() + n * input_chan * input_height_ * input_width_;
+      CHECK_CUDA_ERROR(cudaMemcpy2DAsync(
+        batch_image_d, static_cast<size_t>(src_width_) * 3, image.data, image.step,
+        static_cast<size_t>(src_width_) * 3, src_height_, cudaMemcpyHostToDevice, *stream_));
+      CHECK_CUDA_ERROR(launchBgrToNchwPreprocess(
+        batch_image_d, src_width_, src_height_, src_width_ * 3, batch_input_d,
+        input_width_, input_height_, *stream_));
+    }
+  } else {
+#endif
+    std::vector<cv::Mat> resized_images;
+    resized_images.reserve(batch_size);
+    for (const auto & image : images) {
+      cv::Mat resized_image;
+      cv::resize(image, resized_image, cv::Size(input_width_, input_height_), 0, 0, cv::INTER_CUBIC);
+      resized_images.emplace_back(resized_image);
+    }
 
-  const std::vector<float> mean{0.485f, 0.456f, 0.406f};
-  const std::vector<float> std_vals{0.229f, 0.224f, 0.225f};
+    input_h_.assign(volume, 0.0f);
+    const std::vector<float> mean{0.485f, 0.456f, 0.406f};
+    const std::vector<float> std_vals{0.229f, 0.224f, 0.225f};
 
-  const size_t strides_cv[4] = {
-    static_cast<size_t>(input_width_ * input_chan * input_height_),
-    static_cast<size_t>(input_width_ * input_chan),
-    static_cast<size_t>(input_chan), 1};
-  const size_t strides[4] = {
-    static_cast<size_t>(input_height_ * input_width_ * input_chan),
-    static_cast<size_t>(input_height_ * input_width_),
-    static_cast<size_t>(input_width_), 1};
+    const size_t strides_cv[4] = {
+      static_cast<size_t>(input_width_ * input_chan * input_height_),
+      static_cast<size_t>(input_width_ * input_chan),
+      static_cast<size_t>(input_chan), 1};
+    const size_t strides[4] = {
+      static_cast<size_t>(input_height_ * input_width_ * input_chan),
+      static_cast<size_t>(input_height_ * input_width_),
+      static_cast<size_t>(input_width_), 1};
 
-  for (size_t n = 0; n < batch_size; ++n) {
-    const auto & img = resized_images[n];
-    const auto * src_ptr = img.data;
-    for (int h = 0; h < input_height_; ++h) {
-      for (int w = 0; w < input_width_; ++w) {
-        for (int c = 0; c < input_chan; ++c) {
-          const size_t offset_cv =
-            h * strides_cv[1] + w * strides_cv[2] + (input_chan - c - 1) * strides_cv[3];
-          const size_t offset =
-            n * strides[0] + c * strides[1] + h * strides[2] + w * strides[3];
-          const float value = static_cast<float>(src_ptr[offset_cv]) / 255.0f;
-          input_h_[offset] = (value - mean[c]) / std_vals[c];
+    for (size_t n = 0; n < batch_size; ++n) {
+      const auto & img = resized_images[n];
+      const auto * src_ptr = img.data;
+      for (int h = 0; h < input_height_; ++h) {
+        for (int w = 0; w < input_width_; ++w) {
+          for (int c = 0; c < input_chan; ++c) {
+            const size_t offset_cv =
+              h * strides_cv[1] + w * strides_cv[2] + (input_chan - c - 1) * strides_cv[3];
+            const size_t offset =
+              n * strides[0] + c * strides[1] + h * strides[2] + w * strides[3];
+            const float value = static_cast<float>(src_ptr[offset_cv]) / 255.0f;
+            input_h_[offset] = (value - mean[c]) / std_vals[c];
+          }
         }
       }
     }
+    CHECK_CUDA_ERROR(cudaMemcpyAsync(
+      input_d_.get(), input_h_.data(), input_h_.size() * sizeof(float), cudaMemcpyHostToDevice,
+      *stream_));
+#ifdef DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS
   }
+#endif
 
   auto * engine = trt_common_->getEngine();
   for (int i = 0; i < trt_common_->getNbIOTensors(); ++i) {
@@ -338,9 +360,6 @@ void TensorRTDepthAnything::preprocess(const std::vector<cv::Mat> & images)
     }
   }
 
-  CHECK_CUDA_ERROR(cudaMemcpyAsync(
-    input_d_.get(), input_h_.data(), input_h_.size() * sizeof(float), cudaMemcpyHostToDevice,
-    *stream_));
 }
 
 bool TensorRTDepthAnything::infer()
@@ -386,19 +405,21 @@ bool TensorRTDepthAnything::infer()
   }
   profiling_.tensorrt_inference_ms = elapsedMs(inference_start);
 
-  const auto output_copy_start = Clock::now();
-  CHECK_CUDA_ERROR(cudaMemcpyAsync(
-    depth_h_.get(), depth_d_.get(), depth_elem_num_ * sizeof(float),
-    cudaMemcpyDeviceToHost, *stream_));
-
-  if (sky_d_ && sky_h_) {
+  if (!use_gpu_postprocess_) {
+    const auto output_copy_start = Clock::now();
     CHECK_CUDA_ERROR(cudaMemcpyAsync(
-      sky_h_.get(), sky_d_.get(), sky_elem_num_ * sizeof(float),
+      depth_h_.get(), depth_d_.get(), depth_elem_num_ * sizeof(float),
       cudaMemcpyDeviceToHost, *stream_));
-  }
 
-  CHECK_CUDA_ERROR(cudaStreamSynchronize(*stream_));
-  profiling_.depth_output_copy_ms = elapsedMs(output_copy_start);
+    if (sky_d_ && sky_h_) {
+      CHECK_CUDA_ERROR(cudaMemcpyAsync(
+        sky_h_.get(), sky_d_.get(), sky_elem_num_ * sizeof(float),
+        cudaMemcpyDeviceToHost, *stream_));
+    }
+
+    CHECK_CUDA_ERROR(cudaStreamSynchronize(*stream_));
+    profiling_.depth_output_copy_ms = elapsedMs(output_copy_start);
+  }
 
   return true;
 }
@@ -411,10 +432,90 @@ void TensorRTDepthAnything::postprocess(
   const auto output_dims = trt_common_->getBindingDimensions(1);
   const int height = output_dims.nbDims > 2 ? output_dims.d[2] : input_height_;
   const int width = output_dims.nbDims > 3 ? output_dims.d[3] : input_width_;
+  model_depth_width_ = width;
+  model_depth_height_ = height;
+  const size_t plane_size = static_cast<size_t>(height) * width;
+
+  // Use original intrinsics for metric conversion per spec.
+  const double fx = camera_info.k[0] * scale_x_;
+  const double fy = camera_info.k[4] * scale_y_;
+  const double focal_pixels = 0.5 * (fx + fy);
+  const double focal_scale = focal_pixels > 0.0 ? focal_pixels / 300.0 : 1.0;
+
+#ifdef DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS
+  if (use_gpu_postprocess_) {
+    if (model_depth_elem_num_ != plane_size) {
+      model_depth_elem_num_ = plane_size;
+      model_depth_d_ = cuda_utils::make_unique<float[]>(model_depth_elem_num_);
+    }
+    const size_t resized_plane_size = static_cast<size_t>(src_width_) * src_height_;
+    if (resized_depth_elem_num_ != resized_plane_size) {
+      resized_depth_elem_num_ = resized_plane_size;
+      resized_depth_d_ = cuda_utils::make_unique<float[]>(resized_depth_elem_num_);
+    }
+
+    CHECK_CUDA_ERROR(launchDepthCleanScale(
+      depth_d_.get(), sky_d_.get(), model_depth_d_.get(), width, height,
+      static_cast<float>(focal_scale), sky_threshold_, sky_depth_cap_, *stream_));
+    if (profiling_enabled_) {
+      CHECK_CUDA_ERROR(cudaStreamSynchronize(*stream_));
+    }
+    profiling_.depth_postprocess_ms = elapsedMs(postprocess_start);
+
+    const auto resize_start = Clock::now();
+    CHECK_CUDA_ERROR(launchDepthResizeBilinear(
+      model_depth_d_.get(), width, height, resized_depth_d_.get(), src_width_, src_height_,
+      *stream_));
+    if (profiling_enabled_) {
+      CHECK_CUDA_ERROR(cudaStreamSynchronize(*stream_));
+    }
+    profiling_.depth_resize_ms = elapsedMs(resize_start);
+
+    const auto output_copy_start = Clock::now();
+    depth_image_.create(src_height_, src_width_, CV_32FC1);
+    CHECK_CUDA_ERROR(cudaMemcpyAsync(
+      depth_image_.data, resized_depth_d_.get(), resized_depth_elem_num_ * sizeof(float),
+      cudaMemcpyDeviceToHost, *stream_));
+    if (generate_pointcloud) {
+      model_depth_.create(height, width, CV_32FC1);
+      CHECK_CUDA_ERROR(cudaMemcpyAsync(
+        model_depth_.data, model_depth_d_.get(), model_depth_elem_num_ * sizeof(float),
+        cudaMemcpyDeviceToHost, *stream_));
+      if (sky_d_ && sky_h_) {
+        CHECK_CUDA_ERROR(cudaMemcpyAsync(
+          sky_h_.get(), sky_d_.get(), sky_elem_num_ * sizeof(float),
+          cudaMemcpyDeviceToHost, *stream_));
+      }
+    }
+    CHECK_CUDA_ERROR(cudaStreamSynchronize(*stream_));
+    profiling_.depth_output_copy_ms = elapsedMs(output_copy_start);
+
+    sky_mask_.release();
+    if (generate_pointcloud && sky_h_) {
+      cv::Mat sky_pred(height, width, CV_32FC1, const_cast<float *>(sky_h_.get()));
+      sky_mask_ = sky_pred < sky_threshold_;
+    }
+
+    cv::Mat colorized = rgb_image;
+    if (!colorized.empty() &&
+        (colorized.rows != depth_image_.rows || colorized.cols != depth_image_.cols)) {
+      cv::resize(colorized, colorized, depth_image_.size(), 0, 0, cv::INTER_LINEAR);
+    }
+
+    if (generate_pointcloud) {
+      const auto pointcloud_start = Clock::now();
+      buildPointCloud(camera_info, downsample_factor, colorized);
+      profiling_.depth_to_pointcloud_total_ms = elapsedMs(pointcloud_start);
+    }
+    if (ground_filter_params_.enabled) {
+      buildGpuFilteredPointCloud(camera_info);
+    }
+    return;
+  }
+#endif
 
   // Use depth output directly
   const float * depth_ptr = depth_h_.get();
-  const size_t plane_size = static_cast<size_t>(height) * width;
   model_depth_.create(height, width, CV_32FC1);
   std::memcpy(model_depth_.data, depth_ptr, plane_size * sizeof(float));
 
@@ -434,11 +535,6 @@ void TensorRTDepthAnything::postprocess(
   cv::Mat depth_map = model_depth_.clone();
   depth_map.setTo(0.0f, depth_map <= 0.0f);
 
-  // Use original intrinsics for metric conversion per spec.
-  const double fx = camera_info.k[0] * scale_x_;
-  const double fy = camera_info.k[4] * scale_y_;
-  const double focal_pixels = 0.5 * (fx + fy);
-  const double focal_scale = focal_pixels > 0.0 ? focal_pixels / 300.0 : 1.0;
   depth_map *= static_cast<float>(focal_scale);
 
   // Handle sky: set sky pixels to max depth derived from non-sky regions.
@@ -503,6 +599,9 @@ void TensorRTDepthAnything::postprocess(
     buildPointCloud(camera_info, downsample_factor, colorized);
     profiling_.depth_to_pointcloud_total_ms = elapsedMs(pointcloud_start);
   }
+  if (ground_filter_params_.enabled) {
+    buildGpuFilteredPointCloud(camera_info);
+  }
 }
 
 
@@ -543,6 +642,189 @@ void TensorRTDepthAnything::buildPointCloud(
   // Preserve original timestamp
   point_cloud_.header.stamp = camera_info.header.stamp;
 }
+
+void TensorRTDepthAnything::packFilteredPointCloud(
+  const float * xyzi, unsigned int count, const std::string & frame_id,
+  const builtin_interfaces::msg::Time & stamp)
+{
+  filtered_point_cloud_.header.stamp = stamp;
+  filtered_point_cloud_.header.frame_id = frame_id;
+  filtered_point_cloud_.height = 1;
+  filtered_point_cloud_.width = count;
+  filtered_point_cloud_.is_dense = true;
+  filtered_point_cloud_.is_bigendian = false;
+  filtered_point_cloud_.fields = {
+    sensor_msgs::msg::PointField()
+  };
+  filtered_point_cloud_.fields.resize(4);
+  const char * names[4] = {"x", "y", "z", "intensity"};
+  for (size_t i = 0; i < 4; ++i) {
+    filtered_point_cloud_.fields[i].name = names[i];
+    filtered_point_cloud_.fields[i].offset = static_cast<uint32_t>(i * sizeof(float));
+    filtered_point_cloud_.fields[i].datatype = sensor_msgs::msg::PointField::FLOAT32;
+    filtered_point_cloud_.fields[i].count = 1;
+  }
+  filtered_point_cloud_.point_step = 4 * sizeof(float);
+  filtered_point_cloud_.row_step = filtered_point_cloud_.point_step * count;
+  filtered_point_cloud_.data.resize(static_cast<size_t>(filtered_point_cloud_.row_step));
+  if (count > 0) {
+    std::memcpy(filtered_point_cloud_.data.data(), xyzi, filtered_point_cloud_.data.size());
+  }
+}
+
+void TensorRTDepthAnything::buildGpuFilteredPointCloud(
+  const sensor_msgs::msg::CameraInfo & camera_info)
+{
+  const auto filter_start = Clock::now();
+  const auto & p = ground_filter_params_;
+  const int downsample = std::max(1, p.downsample_factor);
+  const std::string frame_id = "base_link";
+  const float bev_resolution = std::max(0.01f, p.bev_resolution);
+  const float reach = std::max(p.max_depth, p.blind_spot + 1.0f);
+  const float x_min = p.blind_spot;
+  const float x_max = reach + std::abs(p.camera_x) + std::abs(p.camera_z) + 1.0f;
+  const float y_extent = reach + std::abs(p.camera_y) + 1.0f;
+  const int bev_origin_x = static_cast<int>(std::floor(x_min / bev_resolution));
+  const int bev_max_x = static_cast<int>(std::floor(x_max / bev_resolution));
+  const int bev_origin_y = static_cast<int>(std::floor(-y_extent / bev_resolution));
+  const int bev_max_y = static_cast<int>(std::floor(y_extent / bev_resolution));
+  const int bev_width = std::max(1, bev_max_x - bev_origin_x + 1);
+  const int bev_height = std::max(1, bev_max_y - bev_origin_y + 1);
+  const size_t bev_cell_count = static_cast<size_t>(bev_width) * static_cast<size_t>(bev_height);
+
+  const double fx_d = camera_info.k[0] * scale_x_;
+  const double fy_d = camera_info.k[4] * scale_y_;
+  const double cx_d = camera_info.k[2] * scale_x_;
+  const double cy_d = camera_info.k[5] * scale_y_;
+  if (fx_d <= 0.0 || fy_d <= 0.0 || !std::isfinite(fx_d) || !std::isfinite(fy_d)) {
+    packFilteredPointCloud(nullptr, 0U, frame_id, camera_info.header.stamp);
+    return;
+  }
+
+#ifdef DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS
+  if (use_gpu_postprocess_ && model_depth_d_) {
+    const int width = model_depth_width_ > 0 ? model_depth_width_ : input_width_;
+    const int height = model_depth_height_ > 0 ? model_depth_height_ : input_height_;
+    const size_t sampled_width = static_cast<size_t>((width + downsample - 1) / downsample);
+    const size_t sampled_height = static_cast<size_t>((height + downsample - 1) / downsample);
+    const size_t capacity = sampled_width * sampled_height;
+    if (filtered_cloud_capacity_ != capacity) {
+      filtered_cloud_capacity_ = capacity;
+      filtered_cloud_d_ = cuda_utils::make_unique<float[]>(filtered_cloud_capacity_ * 4);
+      filtered_cloud_h_ = cuda_utils::make_unique_host<float[]>(
+        filtered_cloud_capacity_ * 4, cudaHostAllocDefault);
+      filtered_count_d_ = cuda_utils::make_unique<unsigned int[]>(1);
+    }
+    if (bev_ground_cell_count_ != bev_cell_count) {
+      bev_ground_cell_count_ = bev_cell_count;
+      bev_ground_min_z_d_ = cuda_utils::make_unique<int[]>(bev_ground_cell_count_);
+    }
+
+    CHECK_CUDA_ERROR(cudaMemsetAsync(filtered_count_d_.get(), 0, sizeof(unsigned int), *stream_));
+    CHECK_CUDA_ERROR(cudaMemsetAsync(
+      bev_ground_min_z_d_.get(), 0x7f, bev_ground_cell_count_ * sizeof(int), *stream_));
+    CHECK_CUDA_ERROR(launchDepthToFilteredCloud(
+      model_depth_d_.get(), sky_d_.get(), filtered_cloud_d_.get(), filtered_count_d_.get(),
+      bev_ground_min_z_d_.get(), width, height, downsample, static_cast<float>(fx_d), static_cast<float>(fy_d),
+      static_cast<float>(cx_d), static_cast<float>(cy_d), p.camera_x, p.camera_y, p.camera_z,
+      std::cos(p.camera_pitch), std::sin(p.camera_pitch), p.blind_spot, p.min_z, p.max_z,
+      p.min_depth, p.max_depth, bev_resolution, p.bev_height_diff, bev_origin_x, bev_origin_y,
+      bev_width, bev_height, sky_threshold_, *stream_));
+    CHECK_CUDA_ERROR(cudaStreamSynchronize(*stream_));
+    profiling_.gpu_ground_filter_ms = elapsedMs(filter_start);
+
+    const auto copy_start = Clock::now();
+    unsigned int count = 0;
+    CHECK_CUDA_ERROR(cudaMemcpyAsync(
+      &count, filtered_count_d_.get(), sizeof(unsigned int), cudaMemcpyDeviceToHost, *stream_));
+    CHECK_CUDA_ERROR(cudaStreamSynchronize(*stream_));
+    count = std::min<unsigned int>(count, static_cast<unsigned int>(filtered_cloud_capacity_));
+    if (count > 0) {
+      CHECK_CUDA_ERROR(cudaMemcpyAsync(
+        filtered_cloud_h_.get(), filtered_cloud_d_.get(), static_cast<size_t>(count) * 4 * sizeof(float),
+        cudaMemcpyDeviceToHost, *stream_));
+      CHECK_CUDA_ERROR(cudaStreamSynchronize(*stream_));
+    }
+    profiling_.filtered_pointcloud_copy_ms = elapsedMs(copy_start);
+    packFilteredPointCloud(filtered_cloud_h_.get(), count, frame_id, camera_info.header.stamp);
+    return;
+  }
+#endif
+
+  std::vector<float> xyzi;
+  const int width = model_depth_.cols;
+  const int height = model_depth_.rows;
+  struct CandidatePoint
+  {
+    float x;
+    float y;
+    float z;
+    float depth;
+    size_t cell;
+  };
+  std::vector<CandidatePoint> candidates;
+  candidates.reserve(static_cast<size_t>((width + downsample - 1) / downsample) *
+                     static_cast<size_t>((height + downsample - 1) / downsample));
+  constexpr int invalid_ground_mm = 0x7f7f7f7f;
+  std::vector<int> local_ground_mm(bev_cell_count, invalid_ground_mm);
+  const float fx = static_cast<float>(fx_d);
+  const float fy = static_cast<float>(fy_d);
+  const float cx = static_cast<float>(cx_d);
+  const float cy = static_cast<float>(cy_d);
+  const float cos_pitch = std::cos(p.camera_pitch);
+  const float sin_pitch = std::sin(p.camera_pitch);
+  for (int v = 0; v < height; v += downsample) {
+    for (int u = 0; u < width; u += downsample) {
+      if (!sky_mask_.empty() && sky_mask_.at<uint8_t>(v, u) == 0) {
+        continue;
+      }
+      const float z_optical = model_depth_.at<float>(v, u);
+      if (!std::isfinite(z_optical) || z_optical < p.min_depth || z_optical > p.max_depth) {
+        continue;
+      }
+      const float x_optical = (static_cast<float>(u) - cx) * z_optical / fx;
+      const float y_optical = (static_cast<float>(v) - cy) * z_optical / fy;
+      const float x_cam = z_optical;
+      const float y_cam = -x_optical;
+      const float z_cam = -y_optical;
+      const float x_base = cos_pitch * x_cam + sin_pitch * z_cam + p.camera_x;
+      const float y_base = y_cam + p.camera_y;
+      const float z_base = -sin_pitch * x_cam + cos_pitch * z_cam + p.camera_z;
+      if (!std::isfinite(x_base) || !std::isfinite(y_base) || !std::isfinite(z_base) ||
+          x_base <= p.blind_spot) {
+        continue;
+      }
+      const int cell_x = static_cast<int>(std::floor(x_base / bev_resolution)) - bev_origin_x;
+      const int cell_y = static_cast<int>(std::floor(y_base / bev_resolution)) - bev_origin_y;
+      if (cell_x < 0 || cell_x >= bev_width || cell_y < 0 || cell_y >= bev_height) {
+        continue;
+      }
+      const size_t cell = static_cast<size_t>(cell_y) * static_cast<size_t>(bev_width) +
+                          static_cast<size_t>(cell_x);
+      const int z_mm = static_cast<int>(std::lround(z_base * 1000.0f));
+      local_ground_mm[cell] = std::min(local_ground_mm[cell], z_mm);
+      candidates.push_back({x_base, y_base, z_base, z_optical, cell});
+    }
+  }
+  const float min_height = std::max(p.min_z, p.bev_height_diff);
+  xyzi.reserve(candidates.size() * 4);
+  for (const auto & point : candidates) {
+    const int ground_mm = local_ground_mm[point.cell];
+    if (ground_mm == invalid_ground_mm) {
+      continue;
+    }
+    const float height_above_ground = point.z - static_cast<float>(ground_mm) * 0.001f;
+    if (height_above_ground < min_height || height_above_ground > p.max_z) {
+      continue;
+    }
+    xyzi.insert(xyzi.end(), {point.x, point.y, point.z, point.depth});
+  }
+  profiling_.gpu_ground_filter_ms = elapsedMs(filter_start);
+  packFilteredPointCloud(
+    xyzi.empty() ? nullptr : xyzi.data(), static_cast<unsigned int>(xyzi.size() / 4), frame_id,
+    camera_info.header.stamp);
+}
+
 const cv::Mat& TensorRTDepthAnything::getDepthImage() const
 {
   return depth_image_;
@@ -551,6 +833,11 @@ const cv::Mat& TensorRTDepthAnything::getDepthImage() const
 const sensor_msgs::msg::PointCloud2& TensorRTDepthAnything::getPointCloud() const
 {
   return point_cloud_;
+}
+
+const sensor_msgs::msg::PointCloud2& TensorRTDepthAnything::getFilteredPointCloud() const
+{
+  return filtered_point_cloud_;
 }
 
 void TensorRTDepthAnything::printProfiling()

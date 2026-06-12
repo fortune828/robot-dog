@@ -15,6 +15,7 @@
 #include "depth_anything_v3/depth_anything_v3_node.hpp"
 
 #include <filesystem>
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -96,6 +97,34 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
   node_param_.point_cloud_downsample_factor = declare_parameter<int>("point_cloud_downsample_factor", 10);
   node_param_.colorize_point_cloud = declare_parameter<bool>("colorize_point_cloud", true);
   node_param_.enable_profiling = declare_parameter<bool>("enable_profiling", false);
+  node_param_.use_gpu_preprocess = declare_parameter<bool>("use_gpu_preprocess", true);
+  node_param_.use_gpu_postprocess = declare_parameter<bool>("use_gpu_postprocess", true);
+  node_param_.enable_gpu_ground_filter = declare_parameter<bool>("enable_gpu_ground_filter", false);
+  node_param_.gpu_ground_filter_downsample_factor =
+    declare_parameter<int>("gpu_ground_filter_downsample_factor", node_param_.point_cloud_downsample_factor);
+  node_param_.gpu_ground_filter_blind_spot = declare_parameter<double>("blind_spot", 0.3);
+  node_param_.gpu_ground_filter_min_z = declare_parameter<double>("min_z", 0.08);
+  node_param_.gpu_ground_filter_max_z = declare_parameter<double>("max_z", 1.5);
+  node_param_.gpu_ground_filter_min_depth = declare_parameter<double>("min_depth", 0.2);
+  node_param_.gpu_ground_filter_max_depth = declare_parameter<double>("max_depth", 12.0);
+  node_param_.gpu_ground_filter_bev_resolution = declare_parameter<double>("bev_resolution", 0.15);
+  node_param_.gpu_ground_filter_bev_height_diff = declare_parameter<double>("bev_height_diff", 0.12);
+  node_param_.camera_x = declare_parameter<double>("camera_x", 0.15);
+  node_param_.camera_y = declare_parameter<double>("camera_y", 0.0);
+  node_param_.camera_z = declare_parameter<double>("camera_z", 1.0);
+  node_param_.camera_pitch = declare_parameter<double>("camera_pitch", 0.0);
+#ifndef DEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS
+  if (node_param_.use_gpu_preprocess || node_param_.use_gpu_postprocess ||
+      node_param_.enable_gpu_ground_filter) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Custom CUDA preprocess/postprocess kernels were not compiled; using CPU fallback. "
+      "Build with -DDEPTH_ANYTHING_V3_ENABLE_CUDA_KERNELS=ON on a CUDA toolkit system to enable them.");
+  }
+  node_param_.use_gpu_preprocess = false;
+  node_param_.use_gpu_postprocess = false;
+  node_param_.enable_gpu_ground_filter = false;
+#endif
   RCLCPP_INFO(get_logger(), "Point cloud downsampling factor: %d (publishing every %dth point)", 
     node_param_.point_cloud_downsample_factor, node_param_.point_cloud_downsample_factor);
 
@@ -135,6 +164,10 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
   if (node_param_.enable_point_cloud) {
     pub_point_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/output/point_cloud", 1);
   }
+  if (node_param_.enable_gpu_ground_filter) {
+    pub_filtered_point_cloud_ =
+      create_publisher<sensor_msgs::msg::PointCloud2>("~/output/filtered_point_cloud", 1);
+  }
   
   if (node_param_.enable_debug) {
     pub_depth_image_debug_ = create_publisher<sensor_msgs::msg::Image>(
@@ -153,14 +186,16 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
   int batch = 1;
   tensorrt_common::BatchConfig batch_config{1, batch / 2, batch};
 
-  bool use_gpu_preprocess = false;
   std::string calibration_images = "calibration_images.txt";
   const size_t workspace_size = (1 << 30);
 
   tensorrt_depth_anything_ = std::make_shared<TensorRTDepthAnything>(
-    node_param_.onnx_path, node_param_.precision, build_config, use_gpu_preprocess,
+    node_param_.onnx_path, node_param_.precision, build_config,
+    node_param_.use_gpu_preprocess, node_param_.use_gpu_postprocess,
     calibration_images, batch_config, workspace_size);
   tensorrt_depth_anything_->setSkyThreshold(static_cast<float>(node_param_.sky_threshold));
+  tensorrt_depth_anything_->setSkyDepthCap(static_cast<float>(node_param_.sky_depth_cap));
+  applyGroundFilterParams();
     
   RCLCPP_INFO(get_logger(), "Finished initializing Depth Anything V3 TensorRT model");
 }
@@ -195,6 +230,7 @@ void DepthAnythingV3Node::onImageCameraInfo(
   
   auto start = std::chrono::high_resolution_clock::now();
   tensorrt_depth_anything_->setProfilingEnabled(node_param_.enable_profiling);
+  applyGroundFilterParams();
   bool success = tensorrt_depth_anything_->doInference(
     input_images, *camera_info_msg, node_param_.enable_point_cloud,
     node_param_.point_cloud_downsample_factor, node_param_.colorize_point_cloud);
@@ -231,6 +267,19 @@ void DepthAnythingV3Node::onImageCameraInfo(
     const auto pointcloud_publish_start = Clock::now();
     pub_point_cloud_->publish(point_cloud);
     pointcloud_publish_ms = elapsedMs(pointcloud_publish_start);
+  }
+
+  double filtered_pointcloud_copy_ms = 0.0;
+  double filtered_pointcloud_publish_ms = 0.0;
+  if (node_param_.enable_gpu_ground_filter && pub_filtered_point_cloud_) {
+    const auto filtered_copy_start = Clock::now();
+    sensor_msgs::msg::PointCloud2 filtered_cloud =
+      tensorrt_depth_anything_->getFilteredPointCloud();
+    filtered_cloud.header.stamp = image_msg->header.stamp;
+    filtered_pointcloud_copy_ms = elapsedMs(filtered_copy_start);
+    const auto filtered_publish_start = Clock::now();
+    pub_filtered_point_cloud_->publish(filtered_cloud);
+    filtered_pointcloud_publish_ms = elapsedMs(filtered_publish_start);
   }
 
   // Publish debug depth image if enabled
@@ -315,6 +364,10 @@ void DepthAnythingV3Node::onImageCameraInfo(
     addTiming(status, "depth_publish", depth_publish_ms);
     addTiming(status, "pointcloud_message_copy", pointcloud_copy_ms);
     addTiming(status, "pointcloud_publish", pointcloud_publish_ms);
+    addTiming(status, "gpu_ground_filter", p.gpu_ground_filter_ms);
+    addTiming(status, "filtered_pointcloud_copy", p.filtered_pointcloud_copy_ms);
+    addTiming(status, "filtered_pointcloud_message_copy", filtered_pointcloud_copy_ms);
+    addTiming(status, "filtered_pointcloud_publish", filtered_pointcloud_publish_ms);
     addTiming(status, "depth_debug_generation", depth_debug_ms);
     addTiming(status, "wrapper_callback_total", elapsedMs(callback_start));
     array.status.push_back(std::move(status));
@@ -344,10 +397,27 @@ rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
     update_param(params, "point_cloud_downsample_factor", p.point_cloud_downsample_factor);
     update_param(params, "colorize_point_cloud", p.colorize_point_cloud);
     update_param(params, "enable_profiling", p.enable_profiling);
+    update_param(params, "use_gpu_preprocess", p.use_gpu_preprocess);
+    update_param(params, "use_gpu_postprocess", p.use_gpu_postprocess);
+    update_param(params, "enable_gpu_ground_filter", p.enable_gpu_ground_filter);
+    update_param(params, "gpu_ground_filter_downsample_factor", p.gpu_ground_filter_downsample_factor);
+    update_param(params, "blind_spot", p.gpu_ground_filter_blind_spot);
+    update_param(params, "min_z", p.gpu_ground_filter_min_z);
+    update_param(params, "max_z", p.gpu_ground_filter_max_z);
+    update_param(params, "min_depth", p.gpu_ground_filter_min_depth);
+    update_param(params, "max_depth", p.gpu_ground_filter_max_depth);
+    update_param(params, "bev_resolution", p.gpu_ground_filter_bev_resolution);
+    update_param(params, "bev_height_diff", p.gpu_ground_filter_bev_height_diff);
+    update_param(params, "camera_x", p.camera_x);
+    update_param(params, "camera_y", p.camera_y);
+    update_param(params, "camera_z", p.camera_z);
+    update_param(params, "camera_pitch", p.camera_pitch);
     
     // Apply runtime-configurable model parameters
     if (tensorrt_depth_anything_) {
       tensorrt_depth_anything_->setSkyThreshold(static_cast<float>(p.sky_threshold));
+      tensorrt_depth_anything_->setSkyDepthCap(static_cast<float>(p.sky_depth_cap));
+      applyGroundFilterParams();
     }
   } catch (const rclcpp::exceptions::InvalidParameterTypeException & e) {
     result.successful = false;
@@ -357,6 +427,28 @@ rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
   result.successful = true;
   result.reason = "success";
   return result;
+}
+
+void DepthAnythingV3Node::applyGroundFilterParams()
+{
+  if (!tensorrt_depth_anything_) {
+    return;
+  }
+  TensorRTDepthAnything::GroundFilterParams params;
+  params.enabled = node_param_.enable_gpu_ground_filter;
+  params.downsample_factor = std::max(1, node_param_.gpu_ground_filter_downsample_factor);
+  params.blind_spot = static_cast<float>(node_param_.gpu_ground_filter_blind_spot);
+  params.min_z = static_cast<float>(node_param_.gpu_ground_filter_min_z);
+  params.max_z = static_cast<float>(node_param_.gpu_ground_filter_max_z);
+  params.min_depth = static_cast<float>(node_param_.gpu_ground_filter_min_depth);
+  params.max_depth = static_cast<float>(node_param_.gpu_ground_filter_max_depth);
+  params.bev_resolution = static_cast<float>(node_param_.gpu_ground_filter_bev_resolution);
+  params.bev_height_diff = static_cast<float>(node_param_.gpu_ground_filter_bev_height_diff);
+  params.camera_x = static_cast<float>(node_param_.camera_x);
+  params.camera_y = static_cast<float>(node_param_.camera_y);
+  params.camera_z = static_cast<float>(node_param_.camera_z);
+  params.camera_pitch = static_cast<float>(node_param_.camera_pitch);
+  tensorrt_depth_anything_->setGroundFilterParams(params);
 }
 
 int DepthAnythingV3Node::getColorMapType(const std::string& colormap_name)

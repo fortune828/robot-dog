@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROBOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONDA_PREFIX="${CV_DEPLOY_PREFIX:-/home/ubuntu/bl/miniconda3/envs/cv_deploy}"
-TRT_LIBS="$CONDA_PREFIX/lib/python3.9/site-packages/tensorrt_libs"
+CONDA_PREFIX="${ROBOTDOG_CONDA_PREFIX:-/home/ubuntu/bl/miniconda3/envs/robotdog}"
+TRT_LIBS="$CONDA_PREFIX/lib/python3.10/site-packages/tensorrt_libs"
 TRT_PREFIX="$ROBOT/.local/tensorrt"
 VIDEO="${1:-$ROBOT/data/videos/559_raw.mp4}"
 FOCAL="${2:-960.0}"

@@ -16,9 +16,24 @@ depth_anything_v3:
     onnx_path: "models/DA3METRIC-LARGE.fp16-batch1.engine"
     precision: "fp16"
     enable_profiling: true
+    use_gpu_preprocess: true
+    use_gpu_postprocess: true
+    enable_gpu_ground_filter: true
+    gpu_ground_filter_downsample_factor: 4
+    blind_spot: 0.3
+    min_z: 0.08
+    max_z: 1.5
+    min_depth: 0.2
+    max_depth: 12.0
+    bev_resolution: 0.15
+    bev_height_diff: 0.12
+    camera_x: 0.15
+    camera_y: 0.0
+    camera_z: 1.0
+    camera_pitch: 0.0
     sky_threshold: 0.3
     sky_depth_cap: 50.0
-    enable_point_cloud: true
+    enable_point_cloud: false
     point_cloud_downsample_factor: 4
     colorize_point_cloud: false
     enable_debug: false

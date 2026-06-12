@@ -24,6 +24,7 @@
 #include <vector>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <builtin_interfaces/msg/time.hpp>
 
 namespace depth_anything_v3
 {
@@ -50,6 +51,25 @@ public:
     double pointcloud_xyz_fill_ms{};
     double pointcloud_rgb_fill_ms{};
     double depth_to_pointcloud_total_ms{};
+    double gpu_ground_filter_ms{};
+    double filtered_pointcloud_copy_ms{};
+  };
+
+  struct GroundFilterParams
+  {
+    bool enabled{false};
+    int downsample_factor{4};
+    float blind_spot{0.3f};
+    float min_z{0.08f};
+    float max_z{1.5f};
+    float min_depth{0.2f};
+    float max_depth{12.0f};
+    float bev_resolution{0.15f};
+    float bev_height_diff{0.12f};
+    float camera_x{0.15f};
+    float camera_y{0.0f};
+    float camera_z{1.0f};
+    float camera_pitch{0.0f};
   };
 
   /**
@@ -65,8 +85,8 @@ public:
   TensorRTDepthAnything(
     const std::string & model_path, const std::string & precision,
     const tensorrt_common::BuildConfig build_config = tensorrt_common::BuildConfig(),
-    const bool use_gpu_preprocess = false, std::string calibration_image_list_file = std::string(),
-    const tensorrt_common::BatchConfig & batch_config = {1, 1, 1},
+    const bool use_gpu_preprocess = false, const bool use_gpu_postprocess = false,
+    std::string calibration_image_list_file = std::string(), const tensorrt_common::BatchConfig & batch_config = {1, 1, 1},
     const size_t max_workspace_size = (1 << 30));
 
   /**
@@ -98,9 +118,11 @@ public:
    * @return point cloud as ROS2 PointCloud2 message (const reference)
    */
   const sensor_msgs::msg::PointCloud2& getPointCloud() const;
+  const sensor_msgs::msg::PointCloud2& getFilteredPointCloud() const;
 
   const Profiling & getProfiling() const { return profiling_; }
   void setProfilingEnabled(bool enabled) { profiling_enabled_ = enabled; }
+  void setGroundFilterParams(const GroundFilterParams & params) { ground_filter_params_ = params; }
 
 private:
   /**
@@ -133,8 +155,13 @@ private:
   void buildPointCloud(
     const sensor_msgs::msg::CameraInfo & camera_info, int downsample_factor,
     const cv::Mat & rgb_image);
+  void buildGpuFilteredPointCloud(const sensor_msgs::msg::CameraInfo & camera_info);
+  void packFilteredPointCloud(
+    const float * xyzi, unsigned int count, const std::string & frame_id,
+    const builtin_interfaces::msg::Time & stamp);
 public:
   void setSkyThreshold(float threshold) { sky_threshold_ = threshold; }
+  void setSkyDepthCap(float depth_cap) { sky_depth_cap_ = depth_cap; }
 
   std::unique_ptr<tensorrt_common::TrtCommon> trt_common_;
 
@@ -160,8 +187,21 @@ public:
 
   // preprocessing parameters
   bool use_gpu_preprocess_;
+  bool use_gpu_postprocess_;
   CudaUniquePtrHost<unsigned char[]> image_buf_h_;
   CudaUniquePtr<unsigned char[]> image_buf_d_;
+  CudaUniquePtr<float[]> model_depth_d_;
+  CudaUniquePtr<float[]> resized_depth_d_;
+  CudaUniquePtr<float[]> filtered_cloud_d_;
+  CudaUniquePtrHost<float[]> filtered_cloud_h_;
+  CudaUniquePtr<unsigned int[]> filtered_count_d_;
+  CudaUniquePtr<int[]> bev_ground_min_z_d_;
+  size_t model_depth_elem_num_{};
+  size_t resized_depth_elem_num_{};
+  size_t filtered_cloud_capacity_{};
+  size_t bev_ground_cell_count_{};
+  int model_depth_width_{};
+  int model_depth_height_{};
 
   int src_width_;
   int src_height_;
@@ -173,8 +213,10 @@ public:
   double scale_x_{1.0};
   double scale_y_{1.0};
   float sky_threshold_{0.3f};
-  const float sky_depth_cap_{200.0f};
+  float sky_depth_cap_{200.0f};
   sensor_msgs::msg::PointCloud2 point_cloud_;
+  sensor_msgs::msg::PointCloud2 filtered_point_cloud_;
+  GroundFilterParams ground_filter_params_{};
   Profiling profiling_{};
   bool profiling_enabled_{false};
 };

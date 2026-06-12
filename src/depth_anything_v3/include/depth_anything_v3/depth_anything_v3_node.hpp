@@ -59,6 +59,21 @@ public:
     int point_cloud_downsample_factor{};  // Only publish every Nth point (1 = no downsampling)
     bool colorize_point_cloud{};  // Add RGB colors from input image to point cloud
     bool enable_profiling{};  // Publish detailed per-frame wrapper timings
+    bool use_gpu_preprocess{};
+    bool use_gpu_postprocess{};
+    bool enable_gpu_ground_filter{};
+    int gpu_ground_filter_downsample_factor{};
+    double gpu_ground_filter_blind_spot{};
+    double gpu_ground_filter_min_z{};
+    double gpu_ground_filter_max_z{};
+    double gpu_ground_filter_min_depth{};
+    double gpu_ground_filter_max_depth{};
+    double gpu_ground_filter_bev_resolution{};
+    double gpu_ground_filter_bev_height_diff{};
+    double camera_x{};
+    double camera_y{};
+    double camera_z{};
+    double camera_pitch{};
   };
 
 private:
@@ -86,11 +101,13 @@ private:
   // Publishers
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_image_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_point_cloud_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_filtered_point_cloud_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_image_debug_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pub_profiling_;
 
   // Helper methods
   int getColorMapType(const std::string& colormap_name);
+  void applyGroundFilterParams();
 
   // Parameter Server
   OnSetParametersCallbackHandle::SharedPtr set_param_res_;

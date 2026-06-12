@@ -17,6 +17,7 @@
 #include <NvInferPlugin.h>
 #include <dlfcn.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <functional>

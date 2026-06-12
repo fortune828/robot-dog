@@ -4,6 +4,21 @@ depth_anything_v3:
     onnx_path: "models/DA3METRIC-LARGE.onnx"
     precision: "fp16"  # fp16 or fp32
     enable_profiling: false
+    use_gpu_preprocess: true
+    use_gpu_postprocess: true
+    enable_gpu_ground_filter: false
+    gpu_ground_filter_downsample_factor: 4
+    blind_spot: 0.3
+    min_z: 0.08
+    max_z: 1.5
+    min_depth: 0.2
+    max_depth: 12.0
+    bev_resolution: 0.15
+    bev_height_diff: 0.12
+    camera_x: 0.15
+    camera_y: 0.0
+    camera_z: 1.0
+    camera_pitch: 0.0
     
     # Debug configuration
     enable_debug: true

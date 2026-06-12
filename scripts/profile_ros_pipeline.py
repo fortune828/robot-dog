@@ -32,6 +32,10 @@ WRAPPER_STAGES = (
     "depth_publish",
     "pointcloud_message_copy",
     "pointcloud_publish",
+    "gpu_ground_filter",
+    "filtered_pointcloud_copy",
+    "filtered_pointcloud_message_copy",
+    "filtered_pointcloud_publish",
     "depth_debug_generation",
     "wrapper_callback_total",
 )
@@ -77,16 +81,19 @@ class PipelineProfiler(Node):
             return
         frame = self.frames.setdefault(key, {})
         frame.setdefault(stage, time.perf_counter_ns())
-        if stage == "path" and all(name in frame for name in STAGES):
+        required = ("image", "camera_info", "depth", "filtered_cloud", "costmap", "path")
+        if stage == "path" and all(name in frame for name in required):
             start = max(frame["image"], frame["camera_info"])
             values = {
                 "da3": (frame["depth"] - start) / 1e6,
-                "depth_to_raw_cloud_arrival": (frame["raw_cloud"] - frame["depth"]) / 1e6,
-                "ground_filter": (frame["filtered_cloud"] - frame["raw_cloud"]) / 1e6,
+                "depth_to_filtered_cloud_arrival": (frame["filtered_cloud"] - frame["depth"]) / 1e6,
                 "local_costmap_builder": (frame["costmap"] - frame["filtered_cloud"]) / 1e6,
                 "local_astar_planner": (frame["path"] - frame["costmap"]) / 1e6,
                 "total_image_to_path": (frame["path"] - frame["image"]) / 1e6,
             }
+            if "raw_cloud" in frame:
+                values["depth_to_raw_cloud_arrival"] = (frame["raw_cloud"] - frame["depth"]) / 1e6
+                values["ground_filter"] = (frame["filtered_cloud"] - frame["raw_cloud"]) / 1e6
             for name, value in values.items():
                 if value >= 0.0:
                     self.samples[name].append(value)
@@ -107,8 +114,9 @@ class PipelineProfiler(Node):
         self.print_table(
             "ROS topic-to-topic",
             (
-                "da3", "depth_to_raw_cloud_arrival", "ground_filter", "local_costmap_builder",
-                "local_astar_planner", "total_image_to_path",
+                "da3", "depth_to_raw_cloud_arrival", "ground_filter",
+                "depth_to_filtered_cloud_arrival", "local_costmap_builder", "local_astar_planner",
+                "total_image_to_path",
             ),
         )
 
