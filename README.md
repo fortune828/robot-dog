@@ -7,8 +7,8 @@
 模型位于 `models/da3/`，测试视频位于 `data/videos/`，生成结果放入
 `data/output/`。默认启动使用物理第二张 GPU，并关闭深度彩色调试图以减少额外开销。
 
-DA3 TensorRT ROS2 wrapper 当前放在同级目录
-`/home/ubuntu/bl/workspace/Depth/ros2-depth-anything-v3-trt`，首次使用前运行准备脚本完成编译与模型链接。
+DA3 TensorRT C++ ROS2 package 已整合在 `src/depth_anything_v3/`。TensorRT 编译头文件位于
+`third_party/tensorrt/`；准备脚本使用现有 `cv_deploy` conda 环境中的 CUDA/TensorRT 运行库。
 
 ## 构建与启动
 

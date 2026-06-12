@@ -44,3 +44,9 @@ ros2 topic echo /local_path --once
 
 当前 wrapper 原生面向 TensorRT，适合服务器和 NVIDIA Jetson 路线。若最终端侧不是 NVIDIA，保留
 ROS 接口并替换 DA3 推理后端即可，地面过滤与导航链路不需要重写。
+
+## C++ 主链路与 Python 独立脚本
+
+ROS2 主链路使用 `src/depth_anything_v3/` 中的 C++ TensorRT package。它执行 RGB 转换、ImageNet mean/std 归一化、metric focal scaling、sky mask、深度缩放和 PointCloud2 生成。
+
+`scripts/benchmark_da3_engine.py` 与 C++ 使用相同的 RGB 和 ImageNet mean/std 输入归一化，但直接可视化原始 depth tensor，不执行 metric focal scaling、sky mask 和 PointCloud2 后处理。因此其 `Pure-engine FPS` 用于评估 TensorRT engine 推理速度，视觉结果和完整链路 FPS 不应与 C++ ROS2 主链路直接比较。

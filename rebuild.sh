@@ -24,7 +24,11 @@ source /opt/ros/humble/setup.bash
 echo "[INFO] 清理旧的 build/install/log..."
 rm -rf build/ install/ log/
 
-# 4. 编译
+# 4. 编译内置 DA3 C++ package 及其依赖
+echo "[INFO] 准备 DA3 TensorRT C++ package..."
+bash scripts/prepare_da3.sh
+
+# 5. 编译其余 ROS2 packages
 echo "[INFO] 开始编译..."
 colcon build --symlink-install
 

@@ -1,0 +1,24 @@
+depth_anything_v3:
+  ros__parameters:
+    # Model configuration
+    onnx_path: "models/DA3METRIC-LARGE.onnx"
+    precision: "fp16"  # fp16 or fp32
+    enable_profiling: false
+    
+    # Debug configuration
+    enable_debug: true
+    debug_colormap: "JET"  # JET, HOT, COOL, SPRING, SUMMER, AUTUMN, WINTER, BONE, GRAY, HSV, PARULA, PLASMA, INFERNO, VIRIDIS, MAGMA, CIVIDIS
+    debug_filepath: "/tmp/depth_anything_v3_debug/"
+    write_colormap: false
+    debug_colormap_min_depth: 0.0    # Minimum depth value for colormap visualization
+    debug_colormap_max_depth: 50.0   # Maximum depth value for colormap visualization
+    sky_threshold: 0.3               # Threshold for sky classification (lower = more sky)
+    sky_depth_cap: 200.0             # Maximum depth value to fill sky regions
+    
+    # Optional PointCloud2 debug output
+    enable_point_cloud: true
+    # Point cloud downsampling (1 = no downsampling, 10 = every 10th point)
+    point_cloud_downsample_factor: 2
+    
+    # Point cloud colorization with RGB from input image
+    colorize_point_cloud: true  # Set to true to publish RGB point cloud instead of XYZ only

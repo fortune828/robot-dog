@@ -15,6 +15,7 @@ depth_anything_v3:
   ros__parameters:
     onnx_path: "models/DA3METRIC-LARGE.fp16-batch1.engine"
     precision: "fp16"
+    enable_profiling: true
     sky_threshold: 0.3
     sky_depth_cap: 50.0
     enable_point_cloud: true

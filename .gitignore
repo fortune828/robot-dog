@@ -9,6 +9,7 @@ dist/
 build/
 install/
 log/
+.local/
 
 # IDE
 .vscode/

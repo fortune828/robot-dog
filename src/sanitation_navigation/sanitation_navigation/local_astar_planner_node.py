@@ -1,5 +1,6 @@
-"""Plan a local A* path whenever a local OccupancyGrid arrives."""
+"""Plan a clearance-aware, stable local path from each OccupancyGrid."""
 
+import math
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
@@ -8,7 +9,17 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker
 
-from sanitation_core.local_planning_utils import astar_grid, cell_to_world, nearest_free, simplify_collinear, world_to_cell
+from sanitation_core.local_planning_utils import (
+    cell_to_world,
+    early_avoidance_candidates,
+    forward_corridor_has_obstacle,
+    nearest_free,
+    obstacle_cost_field,
+    path_distance_field,
+    simplify_collinear,
+    weighted_astar_grid,
+    world_to_cell,
+)
 
 
 class LocalAstarPlannerNode(Node):
@@ -20,6 +31,11 @@ class LocalAstarPlannerNode(Node):
             "start_x": 0.0, "start_y": 0.0, "goal_x": 5.0, "goal_y": 0.0,
             "allow_diagonal": True, "obstacle_threshold": 80,
             "unknown_as_obstacle": False, "path_smoothing": True,
+            "early_avoidance_enabled": True, "early_avoidance_distance": 3.5,
+            "early_avoidance_width": 1.0, "preferred_clearance": 1.0,
+            "heuristic_weight": 2.0, "obstacle_cost_weight": 3.5,
+            "smoothness_weight": 0.4, "path_change_weight": 1.0,
+            "goal_direction_weight": 0.2,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -28,7 +44,8 @@ class LocalAstarPlannerNode(Node):
         self._goal_pub = self.create_publisher(Marker, self._p["goal_marker_topic"], 10)
         self._status_pub = self.create_publisher(String, self._p["status_topic"], 10)
         self._sub = self.create_subscription(OccupancyGrid, self._p["grid_topic"], self._grid_callback, 10)
-        self.get_logger().info(f"Local A* ready | {self._p['grid_topic']} -> {self._p['path_topic']}")
+        self._previous_path = []
+        self.get_logger().info(f"Cost-aware local A* ready | {self._p['grid_topic']} -> {self._p['path_topic']}")
 
     def _grid_callback(self, msg: OccupancyGrid):
         width, height = msg.info.width, msg.info.height
@@ -56,10 +73,28 @@ class LocalAstarPlannerNode(Node):
         if free_goal is None:
             self._fail(msg, "FAILED_GOAL_BLOCKED")
             return
-        cells = astar_grid(blocked, free_start, free_goal, bool(self._p["allow_diagonal"]))
+
+        resolution = msg.info.resolution
+        preferred_clearance = max(float(self._p["preferred_clearance"]), resolution)
+        traversal_cost = obstacle_cost_field(blocked, preferred_clearance, resolution)
+        previous_distance = path_distance_field(blocked.shape, self._previous_path, resolution)
+        path_change_cost = np.minimum(previous_distance / preferred_clearance, 1.0)
+        planner_args = {
+            "traversal_cost": traversal_cost,
+            "allow_diagonal": bool(self._p["allow_diagonal"]),
+            "heuristic_weight": max(1.0, float(self._p["heuristic_weight"])),
+            "obstacle_cost_weight": max(0.0, float(self._p["obstacle_cost_weight"])),
+            "smoothness_weight": max(0.0, float(self._p["smoothness_weight"])),
+            "goal_direction_weight": max(0.0, float(self._p["goal_direction_weight"])),
+            "path_change_cost": path_change_cost,
+            "path_change_weight": max(0.0, float(self._p["path_change_weight"])),
+        }
+        cells, avoidance_side = self._plan(blocked, free_start, free_goal, resolution, planner_args)
         if not cells:
-            self._fail(msg, "FAILED_NO_PATH")
+            status = "STOPPED_BOTH_SIDES_BLOCKED" if avoidance_side == "blocked" else "FAILED_NO_PATH"
+            self._fail(msg, status)
             return
+        self._previous_path = cells
         if self._p["path_smoothing"]:
             cells = simplify_collinear(cells)
         path = Path()
@@ -74,9 +109,39 @@ class LocalAstarPlannerNode(Node):
         self._path_pub.publish(path)
         self._publish_goal(msg, free_goal, origin_x, origin_y)
         adjusted = free_start != start or free_goal != goal
-        self._status_pub.publish(String(data=f"SUCCESS adjusted={adjusted} points={len(cells)}"))
+        self._status_pub.publish(
+            String(data=f"SUCCESS avoidance={avoidance_side} adjusted={adjusted} points={len(cells)}")
+        )
+
+    def _plan(self, blocked, start, goal, resolution, planner_args):
+        if not self._p["early_avoidance_enabled"]:
+            return weighted_astar_grid(blocked, start, goal, **planner_args), "none"
+        distance_cells = max(1, int(math.ceil(self._p["early_avoidance_distance"] / resolution)))
+        half_width_cells = max(1, int(math.ceil(0.5 * self._p["early_avoidance_width"] / resolution)))
+        clearance_cells = max(1, int(math.ceil(self._p["preferred_clearance"] / resolution)))
+        if not forward_corridor_has_obstacle(blocked, start, goal, distance_cells, half_width_cells):
+            return weighted_astar_grid(blocked, start, goal, **planner_args), "none"
+
+        candidates = early_avoidance_candidates(
+            blocked, start, goal, distance_cells, half_width_cells, clearance_cells
+        )
+        options = []
+        for side, waypoint in candidates:
+            first = weighted_astar_grid(blocked, start, waypoint, **planner_args)
+            second = weighted_astar_grid(blocked, waypoint, goal, **planner_args)
+            if not first or not second:
+                continue
+            path = first + second[1:]
+            rows, cols = zip(*path)
+            score = len(path) + float(np.sum(planner_args["traversal_cost"][rows, cols]))
+            options.append((score, side, path))
+        if not options:
+            return [], "blocked"
+        _, side, path = min(options, key=lambda option: option[0])
+        return path, side
 
     def _fail(self, msg, status):
+        self._previous_path = []
         path = Path()
         path.header = msg.header
         self._path_pub.publish(path)

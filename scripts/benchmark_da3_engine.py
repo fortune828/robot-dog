@@ -22,14 +22,9 @@ import torch
 import torch.nn.functional as F
 
 
-DEFAULT_ENGINE = Path(
-    "/home/ubuntu/bl/workspace/robot-dog/"
-    "models/da3/DA3METRIC-LARGE.fp16-batch1.engine"
-)
-
-DEFAULT_VIDEO = Path(
-    "/home/ubuntu/bl/workspace/robot-dog/data/videos/test_video.mp4"
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ENGINE = PROJECT_ROOT / "models/da3/DA3METRIC-LARGE.fp16-batch1.engine"
+DEFAULT_VIDEO = PROJECT_ROOT / "data/videos/test_video.mp4"
 
 
 def torch_dtype(trt_dtype):
@@ -79,6 +74,9 @@ def preprocess_frame(frame_bgr, input_tensor, device, normalize=True, rgb=True):
 
     if normalize:
         frame_tensor = frame_tensor / 255.0
+        frame_tensor[:, 0].sub_(0.485).div_(0.229)
+        frame_tensor[:, 1].sub_(0.456).div_(0.224)
+        frame_tensor[:, 2].sub_(0.406).div_(0.225)
 
     target_h, target_w = input_tensor.shape[-2:]
 
@@ -227,7 +225,7 @@ def main():
     parser.add_argument(
         "--no-normalize",
         action="store_true",
-        help="Disable /255 normalization. Usually not recommended for actual visualization.",
+        help="Disable DA3 ImageNet normalization. Only useful for controlled experiments.",
     )
 
     parser.add_argument(
@@ -373,7 +371,7 @@ def main():
     print(f"Video info: {video_width}x{video_height}, source_fps={source_fps:.2f}, frames={total_frames}")
     print(f"Output: {args.output}")
     print(f"Output info: {output_width}x{output_height}, fps={source_fps:.2f}, codec={args.codec}")
-    print(f"Preprocess: RGB={not args.bgr}, normalize_0_1={not args.no_normalize}")
+    print(f"Preprocess: RGB={not args.bgr}, imagenet_normalization={not args.no_normalize}")
     print(f"Depth output tensor: {depth_name}")
 
     for name in input_names:

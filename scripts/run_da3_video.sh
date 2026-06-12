@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-WRAPPER="$ROOT/Depth/ros2-depth-anything-v3-trt"
-ROBOT="$ROOT/robot-dog"
-CONDA_PREFIX="/home/ubuntu/bl/miniconda3/envs/cv_deploy"
+ROBOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONDA_PREFIX="${CV_DEPLOY_PREFIX:-/home/ubuntu/bl/miniconda3/envs/cv_deploy}"
 TRT_LIBS="$CONDA_PREFIX/lib/python3.9/site-packages/tensorrt_libs"
-TRT_PREFIX="$ROOT/Depth/tensorrt-10.14-local"
-VIDEO="${1:-$ROOT/robot-dog/data/videos/test_video.mp4}"
+TRT_PREFIX="$ROBOT/.local/tensorrt"
+VIDEO="${1:-$ROBOT/data/videos/559_raw.mp4}"
 FOCAL="${2:-960.0}"
 
 set +u
 source /opt/ros/humble/setup.bash
 set -u
 set +u
-source "$WRAPPER/install/setup.bash"
 source "$ROBOT/install/setup.bash"
 set -u
 export CUDA_VISIBLE_DEVICES=1
