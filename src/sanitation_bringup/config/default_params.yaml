@@ -57,6 +57,7 @@ osm_map_manager:
     map_file: ""                                 # 空则自动查找 data/map.osm
     origin_lat: 30.747903
     origin_lon: 103.925269
+    origin_from_first_fix: false
     world_frame: "world"
     topology_marker_topic: "/osm_topology_markers"
     plan_service_name: "/plan_osm_path"
@@ -76,6 +77,28 @@ polygon_coverage_planner:
     mission_status_topic: "/mission_status"
     osm_plan_service: "/plan_osm_path"
     goal_pose_topic: "/goal_pose"
+
+# ---- 无人机 GPS 航点导出 ----
+uav_waypoint_exporter_node:
+  ros__parameters:
+    gps_topic: "/fix"
+    plan_topic: "/global_plan"
+    waypoint_json_topic: "/uav/gps_waypoints_json"
+    origin_mode: "first_fix"                  # "first_fix" 使用启动后第一帧 RTK
+    origin_lat: 30.747903                     # origin_mode=param 时使用
+    origin_lon: 103.925269
+    altitude_m: 30.0                          # 默认相对起飞点高度，实测前按场地修改
+    altitude_mode: "relative_to_takeoff"      # 或 "absolute_amsl" 海拔高度
+    speed_mps: 5.0
+    min_spacing_m: 2.0                        # 航点抽稀距离
+    min_waypoints: 2
+    max_waypoints: 65535                      # DJI Waypoint 3.0 单航线任务上限
+    output_dir: "/home/ubuntu/bl/workspace/robot-dog/data/output"
+    output_prefix: "uav_waypoints"
+    mission_name: "uav_area_mission"
+    coordinate_frame: "WGS84"
+    protocol: "DJI_WAYPOINT_3_0"
+    aircraft_model: "DJI Matrice 4E"
 
 # ---- 地面过滤 ----
 ground_filter_node:

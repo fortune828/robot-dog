@@ -35,5 +35,7 @@ else
 fi
 
 echo "[INFO] 环境已就绪 | Python: $(python --version) | ROS2: Humble | CUDA: ${CUDA_HOME}"
-echo "  启动全 Mock 系统:"
+echo "  启动无人机 GPS 航点导出:"
+echo "    ros2 launch sanitation_bringup uav_waypoint_export.launch.py"
+echo "  启动全 Mock 机器狗系统:"
 echo "    ros2 launch sanitation_bringup demo_mock_system.launch.py"

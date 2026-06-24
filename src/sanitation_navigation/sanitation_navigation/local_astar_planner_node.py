@@ -1,5 +1,6 @@
 """Plan a clearance-aware, stable local path from each OccupancyGrid."""
 
+import copy
 import math
 import numpy as np
 import rclpy
@@ -36,6 +37,7 @@ class LocalAstarPlannerNode(Node):
             "heuristic_weight": 2.0, "obstacle_cost_weight": 3.5,
             "smoothness_weight": 0.4, "path_change_weight": 1.0,
             "goal_direction_weight": 0.2,
+            "hold_last_path_enabled": True, "hold_publish_rate": 10.0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -45,6 +47,13 @@ class LocalAstarPlannerNode(Node):
         self._status_pub = self.create_publisher(String, self._p["status_topic"], 10)
         self._sub = self.create_subscription(OccupancyGrid, self._p["grid_topic"], self._grid_callback, 10)
         self._previous_path = []
+        self._last_path = None
+        if self._p["hold_last_path_enabled"] and float(self._p["hold_publish_rate"]) > 0.0:
+            self._hold_timer = self.create_timer(
+                1.0 / float(self._p["hold_publish_rate"]), self._republish_last_path
+            )
+        else:
+            self._hold_timer = None
         self.get_logger().info(f"Cost-aware local A* ready | {self._p['grid_topic']} -> {self._p['path_topic']}")
 
     def _grid_callback(self, msg: OccupancyGrid):
@@ -107,6 +116,7 @@ class LocalAstarPlannerNode(Node):
             pose.pose.orientation.w = 1.0
             path.poses.append(pose)
         self._path_pub.publish(path)
+        self._last_path = path
         self._publish_goal(msg, free_goal, origin_x, origin_y)
         adjusted = free_start != start or free_goal != goal
         self._status_pub.publish(
@@ -142,6 +152,7 @@ class LocalAstarPlannerNode(Node):
 
     def _fail(self, msg, status):
         self._previous_path = []
+        self._last_path = None
         path = Path()
         path.header = msg.header
         self._path_pub.publish(path)
@@ -158,6 +169,16 @@ class LocalAstarPlannerNode(Node):
         marker.scale.x = marker.scale.y = marker.scale.z = 0.24
         marker.color.g, marker.color.a = 1.0, 1.0
         self._goal_pub.publish(marker)
+
+    def _republish_last_path(self):
+        if self._last_path is None or not self._last_path.poses:
+            return
+        path = copy.deepcopy(self._last_path)
+        now = self.get_clock().now().to_msg()
+        path.header.stamp = now
+        for pose in path.poses:
+            pose.header.stamp = now
+        self._path_pub.publish(path)
 
 
 def main(args=None):

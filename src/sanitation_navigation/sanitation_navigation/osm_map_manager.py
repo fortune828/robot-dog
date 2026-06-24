@@ -79,6 +79,7 @@ class OsmMapManager(Node):
         self.declare_parameter("map_file", "")
         self.declare_parameter("origin_lat", 30.747903)
         self.declare_parameter("origin_lon", 103.925269)
+        self.declare_parameter("origin_from_first_fix", False)
         self.declare_parameter("world_frame", "world")
         self.declare_parameter("topology_marker_topic", "/osm_topology_markers")
         self.declare_parameter("plan_service_name", "/plan_osm_path")
@@ -95,6 +96,11 @@ class OsmMapManager(Node):
         self._origin_lon = (
             self.get_parameter("origin_lon").get_parameter_value().double_value
         )
+        self._origin_from_first_fix = (
+            self.get_parameter("origin_from_first_fix")
+            .get_parameter_value().bool_value
+        )
+        self._origin_locked = not self._origin_from_first_fix
         self._world_frame = (
             self.get_parameter("world_frame").get_parameter_value().string_value
         )
@@ -132,7 +138,12 @@ class OsmMapManager(Node):
                 )
                 raise FileNotFoundError("map.osm not found")
 
+        self._map_file = map_file
         self.get_logger().info(f"Loading OSM map: {map_file}")
+        if self._origin_from_first_fix:
+            self.get_logger().info(
+                "OSM ENU origin will be replaced by the first RTK fix"
+            )
 
         # ---- GPS 状态 ----
         self._current_lat = None
@@ -182,6 +193,22 @@ class OsmMapManager(Node):
     def _gps_callback(self, msg: NavSatFix):
         self._current_lat = msg.latitude
         self._current_lon = msg.longitude
+        if not self._origin_from_first_fix or self._origin_locked:
+            return
+        if not (math.isfinite(msg.latitude) and math.isfinite(msg.longitude)):
+            self.get_logger().warn("忽略无效 GPS，暂不锁定 OSM 投影原点")
+            return
+
+        self._origin_lat = msg.latitude
+        self._origin_lon = msg.longitude
+        self._origin_locked = True
+        self.get_logger().info(
+            f"OSM ENU 原点已由第一帧 RTK 锁定: "
+            f"({self._origin_lat:.8f}, {self._origin_lon:.8f})"
+        )
+        self._buildings = self._load_buildings(self._map_file)
+        self._marker_array = self._build_topology_markers()
+        self._publish_topology_markers()
 
     # ------------------------------------------------------------------
     #  Map loading

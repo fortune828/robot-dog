@@ -97,6 +97,7 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
   node_param_.point_cloud_downsample_factor = declare_parameter<int>("point_cloud_downsample_factor", 10);
   node_param_.colorize_point_cloud = declare_parameter<bool>("colorize_point_cloud", true);
   node_param_.enable_profiling = declare_parameter<bool>("enable_profiling", false);
+  node_param_.max_inference_rate = declare_parameter<double>("max_inference_rate", 0.0);
   node_param_.use_gpu_preprocess = declare_parameter<bool>("use_gpu_preprocess", true);
   node_param_.use_gpu_postprocess = declare_parameter<bool>("use_gpu_postprocess", true);
   node_param_.enable_gpu_ground_filter = declare_parameter<bool>("enable_gpu_ground_filter", false);
@@ -204,6 +205,15 @@ void DepthAnythingV3Node::onImageCameraInfo(
   const sensor_msgs::msg::Image::ConstSharedPtr & image_msg,
   const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg)
 {
+  const auto now = Clock::now();
+  if (node_param_.max_inference_rate > 0.0 && last_inference_time_.time_since_epoch().count() != 0) {
+    const double min_period_ms = 1000.0 / node_param_.max_inference_rate;
+    if (elapsedMs(last_inference_time_) < min_period_ms) {
+      return;
+    }
+  }
+  last_inference_time_ = now;
+
   const auto callback_start = Clock::now();
   const auto image_conversion_start = Clock::now();
   cv_bridge::CvImagePtr in_image_ptr;
@@ -397,6 +407,7 @@ rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
     update_param(params, "point_cloud_downsample_factor", p.point_cloud_downsample_factor);
     update_param(params, "colorize_point_cloud", p.colorize_point_cloud);
     update_param(params, "enable_profiling", p.enable_profiling);
+    update_param(params, "max_inference_rate", p.max_inference_rate);
     update_param(params, "use_gpu_preprocess", p.use_gpu_preprocess);
     update_param(params, "use_gpu_postprocess", p.use_gpu_postprocess);
     update_param(params, "enable_gpu_ground_filter", p.enable_gpu_ground_filter);

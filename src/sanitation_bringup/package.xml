@@ -10,6 +10,7 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sanitation_perception</exec_depend>
   <exec_depend>sanitation_navigation</exec_depend>
+  <exec_depend>sanitation_navigation_cpp</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

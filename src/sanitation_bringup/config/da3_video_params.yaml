@@ -3,7 +3,7 @@ mock_camera_node:
     video_path: "/home/ubuntu/bl/workspace/robot-dog/data/videos/test_video.mp4"
     frame_width: 1280
     frame_height: 720
-    publish_rate: 10.0
+    publish_rate: 30.0
     topic: "/camera/image_raw"
     camera_info_topic: "/camera/camera_info"
     frame_id: "camera_optical_frame"
@@ -16,6 +16,7 @@ depth_anything_v3:
     onnx_path: "models/DA3METRIC-LARGE.fp16-batch1.engine"
     precision: "fp16"
     enable_profiling: true
+    max_inference_rate: 10.0
     use_gpu_preprocess: true
     use_gpu_postprocess: true
     enable_gpu_ground_filter: true

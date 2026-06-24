@@ -24,6 +24,8 @@ setup(
             'gaode_path_proxy = sanitation_navigation.gaode_path_proxy:main',
             'polygon_coverage_planner = sanitation_navigation.polygon_coverage_planner:main',
             'osm_map_manager = sanitation_navigation.osm_map_manager:main',
+            'uav_waypoint_exporter_node = sanitation_navigation.uav_waypoint_exporter_node:main',
+            'uav_waypoints_to_dji_mission_converter = sanitation_navigation.uav_waypoints_to_dji_mission_converter:main',
             'local_costmap_builder_node = sanitation_navigation.local_costmap_builder_node:main',
             'local_astar_planner_node = sanitation_navigation.local_astar_planner_node:main',
         ],

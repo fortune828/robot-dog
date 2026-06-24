@@ -33,6 +33,7 @@
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
+#include <chrono>
 
 #include "depth_anything_v3/tensorrt_depth_anything.hpp"
 
@@ -59,6 +60,7 @@ public:
     int point_cloud_downsample_factor{};  // Only publish every Nth point (1 = no downsampling)
     bool colorize_point_cloud{};  // Add RGB colors from input image to point cloud
     bool enable_profiling{};  // Publish detailed per-frame wrapper timings
+    double max_inference_rate{};  // Maximum inference callback rate in Hz; <=0 disables throttling
     bool use_gpu_preprocess{};
     bool use_gpu_postprocess{};
     bool enable_gpu_ground_filter{};
@@ -120,6 +122,7 @@ private:
   // Core
   std::shared_ptr<TensorRTDepthAnything> tensorrt_depth_anything_;
   bool is_initialized_ = false;
+  std::chrono::steady_clock::time_point last_inference_time_{};
 };
 
 } // namespace depth_anything_v3
