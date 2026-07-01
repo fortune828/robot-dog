@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# setup_env.sh — 机器人狗 ROS2 环境设置 (Python 统一在 robotdog conda 环境)
+# setup_env.sh — uavpatrol ROS2 环境设置 (Python 仍使用 robotdog conda 环境)
 # 使用方法: source setup_env.sh
 # =============================================================================
 
@@ -24,6 +24,7 @@ fi
 # 3. 工作空间环境
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export ROBOTDOG_ROOT="${_SCRIPT_DIR}"
+export UAVPATROL_ROOT="${_SCRIPT_DIR}"
 export CUDA_HOME="${CONDA_PREFIX}"
 export CUDA_PATH="${CONDA_PREFIX}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"
@@ -35,7 +36,7 @@ else
 fi
 
 echo "[INFO] 环境已就绪 | Python: $(python --version) | ROS2: Humble | CUDA: ${CUDA_HOME}"
-echo "  启动无人机 GPS 航点导出:"
-echo "    ros2 launch sanitation_bringup uav_waypoint_export.launch.py"
-echo "  启动全 Mock 机器狗系统:"
+echo "  启动 UAV patrol 航点导出:"
+echo "    ros2 launch uavpatrol_bringup uav_waypoint_export.launch.py use_mock_gps:=true"
+echo "  启动 legacy ground-robot mock 系统:"
 echo "    ros2 launch sanitation_bringup demo_mock_system.launch.py"

@@ -2,7 +2,7 @@ import json
 import zipfile
 from xml.etree import ElementTree as ET
 
-from sanitation_navigation.uav_waypoints_to_dji_mission_converter import convert
+from uavpatrol_navigation.uav_waypoints_to_dji_mission_converter import convert
 
 
 def test_convert_uav_waypoints_to_dji_mission(tmp_path):

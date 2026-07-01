@@ -82,7 +82,8 @@ class UavWaypointExporterNode(Node):
         self._min_spacing_m = float(self.get_parameter("min_spacing_m").value)
         self._min_waypoints = int(self.get_parameter("min_waypoints").value)
         self._max_waypoints = int(self.get_parameter("max_waypoints").value)
-        self._output_dir = Path(str(self.get_parameter("output_dir").value))
+        output_dir_param = str(self.get_parameter("output_dir").value)
+        self._output_dir = Path(output_dir_param) if output_dir_param else Path(default_output)
         self._output_prefix = self.get_parameter("output_prefix").value
         self._mission_name = self.get_parameter("mission_name").value
         self._coordinate_frame = self.get_parameter("coordinate_frame").value

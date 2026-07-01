@@ -1,7 +1,7 @@
 """Launch the UAV GPS waypoint planning/export pipeline.
 
-This launch keeps the existing OSM and coverage planners, but replaces the
-ground robot control layer with a plain GPS waypoint exporter for DJI UAV tests.
+This launch keeps the OSM and coverage planners, then exports GPS waypoints
+for DJI UAV patrol mission generation.
 """
 
 import os
@@ -48,7 +48,7 @@ def generate_launch_description():
     )
     output_dir_arg = DeclareLaunchArgument(
         "output_dir",
-        default_value="/home/ubuntu/bl/workspace/robot-dog/data/output",
+        default_value="",
         description="Directory for exported UAV waypoint CSV/JSON files.",
     )
 

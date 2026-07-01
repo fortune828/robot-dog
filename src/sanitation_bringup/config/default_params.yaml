@@ -1,5 +1,5 @@
 # ============================================================================
-#  四足环卫机器人 — 全局默认参数
+#  uavpatrol — 全局默认参数
 #  修改此文件即可切换 Mock/Real 模式、调整检测阈值等，无需改代码
 # ============================================================================
 
@@ -93,7 +93,7 @@ uav_waypoint_exporter_node:
     min_spacing_m: 2.0                        # 航点抽稀距离
     min_waypoints: 2
     max_waypoints: 65535                      # DJI Waypoint 3.0 单航线任务上限
-    output_dir: "/home/ubuntu/bl/workspace/robot-dog/data/output"
+    output_dir: ""                             # 空则自动使用工程内 data/output
     output_prefix: "uav_waypoints"
     mission_name: "uav_area_mission"
     coordinate_frame: "WGS84"

@@ -269,7 +269,7 @@ def build_template_kml(mission: DjiMission) -> bytes:
     root = ET.Element(_kml("kml"))
     document = _add(root, _kml("Document"))
     now_ms = int(time.time() * 1000)
-    _add(document, _wpml("author"), "robot-dog")
+    _add(document, _wpml("author"), "uavpatrol")
     _add(document, _wpml("createTime"), now_ms)
     _add(document, _wpml("updateTime"), now_ms)
     _add_mission_config(document, mission, include_rth_height=False)
