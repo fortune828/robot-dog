@@ -1,0 +1,83 @@
+# uavpatrol mainline parameters
+
+mock_gps_node:
+  ros__parameters:
+    topic: "/fix"
+    publish_rate: 5.0
+    speed: 10.0
+    frame_id: "gps_link"
+    world_frame: "world"
+    plan_topic: "/global_plan"
+    odom_topic: "/odom"
+    origin_lat: 30.747903
+    origin_lon: 103.925269
+    noise_stddev: 0.000001
+
+osm_map_manager:
+  ros__parameters:
+    map_file: ""
+    origin_lat: 30.747903
+    origin_lon: 103.925269
+    origin_from_first_fix: false
+    enable_routing: false
+    world_frame: "world"
+    topology_marker_topic: "/osm_topology_markers"
+    plan_service_name: "/plan_osm_path"
+    goal_pose_topic: "/goal_pose"
+    global_plan_topic: "/global_plan"
+    gps_topic: "/fix"
+
+polygon_coverage_planner:
+  ros__parameters:
+    area_source: "file"
+    clicked_point_topic: "/clicked_point"
+    plan_topic: "/global_plan"
+    world_frame: "world"
+    closing_threshold: 1.0
+    allow_outside_connectors: true
+    wrap_coverage_from_entry: true
+    enable_osm_semantic_constraints: true
+    avoid_building_overflight: true
+    gps_topic: "/fix"
+    mission_status_topic: "/mission_status"
+    osm_plan_service: "/plan_osm_path"
+    goal_pose_topic: "/goal_pose"
+    use_osm_transit: false
+    repeat_on_mission_complete: false
+
+uav_waypoint_exporter_node:
+  ros__parameters:
+    gps_topic: "/fix"
+    plan_topic: "/global_plan"
+    waypoint_json_topic: "/uav/gps_waypoints_json"
+    origin_mode: "first_fix"
+    origin_lat: 30.747903
+    origin_lon: 103.925269
+    min_spacing_m: 2.0
+    min_waypoints: 2
+    max_waypoints: 65535
+    output_dir: ""
+    output_prefix: "uav_waypoints"
+    mission_name: "uav_area_mission"
+    coordinate_frame: "WGS84"
+    protocol: "DJI_WAYPOINT_3_0"
+    aircraft_model: "DJI Matrice 4E"
+    auto_convert_to_dji: true
+    auto_visualize: true
+    semantic_copy_enabled: false
+    dji_mission_name: "uav_area_patrol"
+    dji_finish_action: "go_home"
+    dji_wayline_id: 0
+
+demo_polygon_node:
+  ros__parameters:
+    clicked_point_topic: "/clicked_point"
+    world_frame: "world"
+    publish_delay_sec: 2.0
+    points: [0.0, 0.0, 20.0, 0.0, 20.0, 12.0, 0.0, 12.0, 0.2, 0.2]
+
+semantic_area_planner:
+  ros__parameters:
+    enable_osm_semantic_constraints: true
+    obstacle_tags: ["building"]
+    avoid_building_overflight: true

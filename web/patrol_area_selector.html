@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UAV Patrol Area Selector</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #172033;
+      background: #f6f7f9;
+    }
+    .shell {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: 100%;
+    }
+    .bar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: center;
+      padding: 12px 16px;
+      background: #ffffff;
+      border-bottom: 1px solid #d9dee8;
+      box-shadow: 0 1px 8px rgba(19, 29, 45, 0.08);
+      z-index: 500;
+    }
+    .title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      align-items: baseline;
+      min-width: 0;
+    }
+    h1 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.2;
+      font-weight: 680;
+    }
+    .meta {
+      color: #5b6678;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    button {
+      height: 34px;
+      border: 1px solid #c7cfdb;
+      background: #ffffff;
+      color: #1d2939;
+      padding: 0 13px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 620;
+    }
+    button.primary {
+      border-color: #2563eb;
+      background: #2563eb;
+      color: white;
+    }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    #map {
+      height: 100%;
+      width: 100%;
+    }
+    .status {
+      position: absolute;
+      left: 14px;
+      bottom: 14px;
+      z-index: 450;
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid #d9dee8;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(18, 28, 45, 0.12);
+      padding: 10px 12px;
+      min-width: 280px;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .status strong {
+      color: #111827;
+    }
+    .hint {
+      color: #667085;
+    }
+    .ok {
+      color: #15803d;
+      font-weight: 650;
+    }
+    .error {
+      color: #b42318;
+      font-weight: 650;
+    }
+    .label {
+      background: #111827;
+      color: white;
+      border: 0;
+      border-radius: 4px;
+      padding: 2px 5px;
+      font: 12px/1.2 sans-serif;
+    }
+    @media (max-width: 720px) {
+      .bar {
+        grid-template-columns: 1fr;
+      }
+      .actions {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+      .meta {
+        white-space: normal;
+      }
+      .status {
+        right: 14px;
+        min-width: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header class="bar">
+    <div class="title">
+      <h1>UAV Patrol Area Selector</h1>
+      <div class="meta" id="outputPath">Loading map...</div>
+    </div>
+    <div class="actions">
+      <button id="clearBtn" type="button">Clear</button>
+      <button id="visualizeBtn" type="button">Generate Route</button>
+      <button id="saveBtn" class="primary" type="button" disabled>Save & Generate</button>
+    </div>
+  </header>
+  <main id="map"></main>
+</div>
+<div class="status">
+  <div><strong>Vertices:</strong> <span id="vertexCount">0</span></div>
+  <div><strong>Area:</strong> <span id="areaValue">0 m²</span></div>
+  <div><strong>Bounds:</strong> <span id="boundsValue" class="hint">Draw a polygon</span></div>
+  <div id="message" class="hint">Draw a patrol area, then save to generate a building-aware route.</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script>
+let map;
+let drawnItems;
+let currentLayer = null;
+let outputPath = '';
+let resultLayers = null;
+let routeRequestId = 0;
+let routeBusy = false;
+
+function formatArea(squareMeters) {
+  if (!Number.isFinite(squareMeters) || squareMeters <= 0) return '0 m²';
+  if (squareMeters >= 1000000) return `${(squareMeters / 1000000).toFixed(3)} km²`;
+  return `${Math.round(squareMeters).toLocaleString()} m²`;
+}
+
+function sphericalPolygonArea(latlngs) {
+  if (latlngs.length < 3) return 0;
+  const radius = 6378137;
+  const toRad = deg => deg * Math.PI / 180;
+  let sum = 0;
+  for (let i = 0; i < latlngs.length; i += 1) {
+    const p1 = latlngs[i];
+    const p2 = latlngs[(i + 1) % latlngs.length];
+    sum += toRad(p2.lng - p1.lng) * (2 + Math.sin(toRad(p1.lat)) + Math.sin(toRad(p2.lat)));
+  }
+  return Math.abs(sum * radius * radius / 2);
+}
+
+function setMessage(text, kind = 'hint') {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.className = kind;
+}
+
+function ensureResultLayers() {
+  if (!resultLayers) {
+    resultLayers = L.layerGroup().addTo(map);
+  }
+  resultLayers.clearLayers();
+}
+
+function clearResultLayers() {
+  if (resultLayers) resultLayers.clearLayers();
+}
+
+function getPolygonLatLngs() {
+  if (!currentLayer) return [];
+  const latlngs = currentLayer.getLatLngs();
+  if (!latlngs.length) return [];
+  return Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
+}
+
+function setRouteBusy(busy) {
+  routeBusy = busy;
+  const latlngs = getPolygonLatLngs();
+  document.getElementById('saveBtn').disabled = busy || latlngs.length < 3;
+  document.getElementById('visualizeBtn').disabled = busy;
+}
+
+function updateStats() {
+  const latlngs = getPolygonLatLngs();
+  document.getElementById('vertexCount').textContent = String(latlngs.length);
+  document.getElementById('areaValue').textContent = formatArea(sphericalPolygonArea(latlngs));
+  document.getElementById('saveBtn').disabled = routeBusy || latlngs.length < 3;
+  if (latlngs.length < 3) {
+    document.getElementById('boundsValue').textContent = 'Draw a polygon';
+    return;
+  }
+  const bounds = L.latLngBounds(latlngs);
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+  document.getElementById('boundsValue').textContent =
+    `${sw.lat.toFixed(6)}, ${sw.lng.toFixed(6)} -> ${ne.lat.toFixed(6)}, ${ne.lng.toFixed(6)}`;
+}
+
+function markAreaChanged(message = 'Area changed. Save & Generate to refresh the route.') {
+  clearResultLayers();
+  setMessage(message, 'hint');
+  updateStats();
+}
+
+function setPolygon(latlngs, fit = false, options = {}) {
+  const dirty = options.dirty !== false;
+  drawnItems.clearLayers();
+  currentLayer = L.polygon(latlngs, {
+    color: '#2563eb',
+    weight: 3,
+    fillColor: '#60a5fa',
+    fillOpacity: 0.24
+  });
+  drawnItems.addLayer(currentLayer);
+  currentLayer.on('edit', () => markAreaChanged());
+  if (dirty) clearResultLayers();
+  if (fit && latlngs.length >= 3) map.fitBounds(currentLayer.getBounds().pad(0.12));
+  updateStats();
+}
+
+async function loadConfig() {
+  const response = await fetch('/api/config');
+  if (!response.ok) throw new Error('Failed to load config');
+  return response.json();
+}
+
+async function loadExistingArea() {
+  const response = await fetch('/api/patrol_area');
+  if (!response.ok) return;
+  const area = await response.json();
+  const boundary = area.boundary || [];
+  if (boundary.length >= 3) {
+    setPolygon(boundary.map(p => [p.latitude, p.longitude]), true, {dirty: false});
+    setMessage('Loaded existing patrol_area.json.', 'ok');
+  }
+}
+
+async function saveArea(messagePrefix = 'Saved') {
+  const latlngs = getPolygonLatLngs();
+  if (latlngs.length < 3) throw new Error('Draw a polygon before generating a route.');
+  const requestId = ++routeRequestId;
+  setRouteBusy(true);
+  setMessage('Saving current polygon and generating route...', 'hint');
+  const payload = {
+    area_name: 'custom_patrol_area',
+    boundary: latlngs.map(p => ({lat: p.lat, lng: p.lng}))
+  };
+  try {
+    const response = await fetch('/api/patrol_area', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || 'Save failed');
+    }
+    if (!result.route_ok) {
+      throw new Error(`Saved patrol area, but route generation failed: ${result.route_error}`);
+    }
+    if (requestId !== routeRequestId) return;
+    const route = result.route;
+    drawGeneratedRoute(route);
+    setMessage(
+      `${messagePrefix} ${result.vertices} vertices. Generated ${route.route_points} waypoints, ` +
+      `${route.static_obstacles} buildings, ${route.obstacle_buffers} buffers. View: ${route.visualization}`,
+      'ok'
+    );
+  } finally {
+    if (requestId === routeRequestId) setRouteBusy(false);
+  }
+}
+
+async function generateView() {
+  const latlngs = getPolygonLatLngs();
+  if (latlngs.length >= 3) {
+    await saveArea('Saved current polygon and generated');
+    return;
+  }
+  const requestId = ++routeRequestId;
+  setRouteBusy(true);
+  setMessage('Generating route from saved patrol_area.json...', 'hint');
+  try {
+    const response = await fetch('/api/generate_route', {method: 'POST'});
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || 'Route generation failed.');
+    }
+    if (requestId !== routeRequestId) return;
+    const route = result.route;
+    drawGeneratedRoute(route);
+    setMessage(
+      `Generated ${route.route_points} waypoints, ${route.static_obstacles} buildings, ` +
+      `${route.obstacle_buffers} buffers. View: ${route.visualization}`,
+      'ok'
+    );
+  } finally {
+    if (requestId === routeRequestId) setRouteBusy(false);
+  }
+}
+
+function drawGeneratedRoute(route) {
+  ensureResultLayers();
+
+  L.geoJSON(route.planning_airspace_geojson, {
+    style: {
+      color: '#64748b',
+      weight: 2,
+      dashArray: '8 6',
+      fillColor: '#cbd5e1',
+      fillOpacity: 0.14
+    }
+  }).bindPopup('Planning airspace').addTo(resultLayers);
+
+  L.geoJSON(route.target_area_geojson, {
+    style: {
+      color: '#2563eb',
+      weight: 3,
+      fillColor: '#93c5fd',
+      fillOpacity: 0.10
+    }
+  }).bindPopup('Target area').addTo(resultLayers);
+
+  L.geoJSON(route.coverage_target_area_geojson, {
+    style: {
+      color: '#16a34a',
+      weight: 2,
+      fillColor: '#86efac',
+      fillOpacity: 0.18
+    }
+  }).bindPopup('Coverage target area').addTo(resultLayers);
+
+  L.geoJSON(route.static_obstacle_buffers_geojson, {
+    style: {
+      color: '#f97316',
+      weight: 2,
+      fillColor: '#fdba74',
+      fillOpacity: 0.28
+    }
+  }).bindPopup('Building safety buffer').addTo(resultLayers);
+
+  L.geoJSON(route.static_obstacles_geojson, {
+    style: {
+      color: '#7f1d1d',
+      weight: 2,
+      fillColor: '#ef4444',
+      fillOpacity: 0.55
+    }
+  }).bindPopup('OSM building').addTo(resultLayers);
+
+  const latlngs = route.route.map(p => [p.latitude, p.longitude]);
+  if (latlngs.length) {
+    L.polyline(latlngs, {
+      color: '#dc2626',
+      weight: 4,
+      opacity: 0.92
+    }).addTo(resultLayers);
+    L.geoJSON(route.transit_segments_geojson, {
+      style: {
+        color: '#7c3aed',
+        weight: 6,
+        opacity: 0.96
+      }
+    }).bindPopup('Transit outside target_area').addTo(resultLayers);
+    const labelStep = route.route.length > 600 ? 25 : (route.route.length > 250 ? 10 : (route.route.length > 120 ? 5 : 1));
+    route.route.forEach((p, i) => {
+      const marker = L.circleMarker([p.latitude, p.longitude], {
+        radius: i === 0 || i === route.route.length - 1 ? 6 : 4,
+        color: i === 0 ? '#16a34a' : (i === route.route.length - 1 ? '#9333ea' : '#dc2626'),
+        fillColor: i === 0 ? '#16a34a' : (i === route.route.length - 1 ? '#9333ea' : '#f97316'),
+        fillOpacity: 0.95,
+        weight: 2
+      }).addTo(resultLayers);
+      if (i === 0 || i === route.route.length - 1 || i % labelStep === 0) {
+        marker.bindTooltip(String(p.index), {
+          permanent: true,
+          direction: 'top',
+          className: 'label',
+          offset: [0, -6]
+        });
+      }
+    });
+    map.fitBounds(L.latLngBounds(latlngs.concat(getPolygonLatLngs())).pad(0.16));
+  }
+}
+
+async function init() {
+  const config = await loadConfig();
+  const b = config.bounds;
+  outputPath = config.output;
+  document.getElementById('outputPath').textContent = outputPath;
+
+  map = L.map('map', {preferCanvas: true});
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 20,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  const campusBounds = L.latLngBounds(
+    [b.min_latitude, b.min_longitude],
+    [b.max_latitude, b.max_longitude]
+  );
+  L.rectangle(campusBounds, {
+    color: '#0f766e',
+    weight: 2,
+    dashArray: '7 6',
+    fillOpacity: 0
+  }).addTo(map).bindTooltip('data/map.osm bounds');
+  map.fitBounds(campusBounds.pad(0.08));
+
+  drawnItems = new L.FeatureGroup();
+  map.addLayer(drawnItems);
+  const drawControl = new L.Control.Draw({
+    draw: {
+      marker: false,
+      polyline: false,
+      rectangle: false,
+      circle: false,
+      circlemarker: false,
+      polygon: {
+        allowIntersection: false,
+        showArea: true,
+        shapeOptions: {
+          color: '#2563eb',
+          weight: 3,
+          fillColor: '#60a5fa',
+          fillOpacity: 0.24
+        }
+      }
+    },
+    edit: {
+      featureGroup: drawnItems,
+      remove: false
+    }
+  });
+  map.addControl(drawControl);
+
+  map.on(L.Draw.Event.CREATED, event => {
+    setPolygon(event.layer.getLatLngs()[0], false, {dirty: true});
+    setMessage('Polygon ready. Click Save & Generate to create the semantic route.', 'hint');
+  });
+  map.on(L.Draw.Event.EDITED, () => markAreaChanged());
+
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    drawnItems.clearLayers();
+    if (resultLayers) resultLayers.clearLayers();
+    currentLayer = null;
+    updateStats();
+    setMessage('Cleared. Draw a new polygon.', 'hint');
+  });
+  document.getElementById('saveBtn').addEventListener('click', async () => {
+    try {
+      await saveArea();
+    } catch (error) {
+      setMessage(error.message, 'error');
+    }
+  });
+  document.getElementById('visualizeBtn').addEventListener('click', async () => {
+    try {
+      await generateView();
+    } catch (error) {
+      setMessage(error.message, 'error');
+    }
+  });
+
+  await loadExistingArea();
+  updateStats();
+}
+
+init().catch(error => setMessage(error.message, 'error'));
+</script>
+</body>
+</html>
